@@ -523,7 +523,7 @@
       const newReqName = ref("");
       const openReqs = reactive({});
       const manualTravel = reactive({ min: null, km: null });
-      const propFilter = reactive({ q: "", estado: "", perros: "", registradoPor: "", pendienteVer: false });
+      const propFilter = reactive({ q: "", estado: "", perros: "", registradoPor: "", pendienteVer: "" });
       const commentForm = reactive({ autor: "Brandon", texto: "" });
       const agendaDay = ref(data.config.dias[0]?.fecha || "2026-11-21");
       const agendaMode = ref("day");
@@ -655,7 +655,13 @@
       const dayMapEl = ref(null);
       const overviewMapEl = ref(null);
       const showOverviewMap = ref(false);
-      let overviewMap = null, overviewMarkers = [];
+      const overviewMapOpts = reactive({ showPrice: true });
+      const overviewSelectedId = ref(null);
+      const overviewShowWork = ref(false);
+      const overviewSelected = computed(() => propOf(overviewSelectedId.value) || null);
+      const overviewSelectedAppt = computed(() => nextApptForProp(overviewSelectedId.value));
+      const overviewSelectedFotos = computed(() => propFotos(overviewSelected.value));
+      let overviewMap = null, overviewMarkers = [], overviewPriceWindows = [], overviewWorkMarker = null;
 
       /* AI */
       const aiOpen = ref(false);
@@ -993,29 +999,18 @@
         pushToGist(true);
       }
 
-      /* ---------- Computed ---------- */
-      const filteredProperties = computed(() => {
-        const q = (propFilter.q || "").toLowerCase().trim();
-        const yo = data.config.personaActiva || "Brandon";
-        return data.properties.filter((p) => {
-          if (propFilter.estado && p.estado !== propFilter.estado) return false;
-          if (propFilter.perros && p.perros?.acepta !== propFilter.perros) return false;
-          if (propFilter.registradoPor && p.registradoPor !== propFilter.registradoPor) return false;
-          if (propFilter.pendienteVer && p.vistos?.[yo]) return false;
-          if (q && !(p.alias || "").toLowerCase().includes(q) && !(p.colonia || "").toLowerCase().includes(q)) return false;
-          return true;
-        });
-      });
-
       function otraPersona(quien) {
         const p = quien || data.config.personaActiva;
         return p === "Atziri" ? "Brandon" : "Atziri";
       }
+      /* Quien registra la propiedad ya cuenta como que la vio. */
       function haVisto(prop, quien) {
-        return !!(prop?.vistos && prop.vistos[quien]);
+        if (!prop || !quien) return false;
+        if (prop.registradoPor === quien) return true;
+        return !!(prop.vistos && prop.vistos[quien]);
       }
       function toggleVisto(prop, quien) {
-        if (!prop) return;
+        if (!prop || !quien || prop.registradoPor === quien) return;
         normalizeProperty(prop);
         prop.vistos[quien] = prop.vistos[quien] ? null : new Date().toISOString();
         persist();
@@ -1023,11 +1018,29 @@
       function marcarVistoYo(prop) {
         const yo = data.config.personaActiva || "Brandon";
         if (!prop) return;
+        if (prop.registradoPor === yo) {
+          toast(yo + " ya cuenta como vista (la registró)", "ok");
+          return;
+        }
         normalizeProperty(prop);
         prop.vistos[yo] = new Date().toISOString();
         persist();
         toast(yo + " marcó como vista", "ok");
       }
+
+      /* ---------- Computed ---------- */
+      const filteredProperties = computed(() => {
+        const q = (propFilter.q || "").toLowerCase().trim();
+        const pendiente = PERSONAS.includes(propFilter.pendienteVer) ? propFilter.pendienteVer : "";
+        return data.properties.filter((p) => {
+          if (propFilter.estado && p.estado !== propFilter.estado) return false;
+          if (propFilter.perros && p.perros?.acepta !== propFilter.perros) return false;
+          if (propFilter.registradoPor && p.registradoPor !== propFilter.registradoPor) return false;
+          if (pendiente && haVisto(p, pendiente)) return false;
+          if (q && !(p.alias || "").toLowerCase().includes(q) && !(p.colonia || "").toLowerCase().includes(q)) return false;
+          return true;
+        });
+      });
       function addComentario(prop) {
         const texto = (commentForm.texto || "").trim();
         const autor = PERSONAS.includes(commentForm.autor) ? commentForm.autor : data.config.personaActiva;
@@ -1262,11 +1275,32 @@
       /* ---------- Property ops ---------- */
       function propOf(id) { return data.properties.find((p) => p.id === id); }
       function propName(id) { return propOf(id)?.alias || "Propiedad"; }
-      function advisorOf(p) { return data.advisors.find((a) => a.id === (typeof p === "string" ? p : p?.advisorId)); }
-      function advisorName(id) { return data.advisors.find((a) => a.id === id)?.nombre || "—"; }
+      function propFotos(p) {
+        if (!p) return [];
+        const raw = Array.isArray(p.fotos) ? p.fotos : [];
+        return raw.map(normalizePhoto).filter(Boolean);
+      }
+      function propHasFotos(p) {
+        return propFotos(p).length > 0;
+      }
+      function advisorIdForProp(p) {
+        if (!p) return "";
+        if (p.advisorId) return String(p.advisorId);
+        const next = data.appointments
+          .filter((a) => a.propertyId === p.id && a.estado !== "Cancelada" && a.advisorId)
+          .sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora))[0];
+        return next?.advisorId ? String(next.advisorId) : "";
+      }
+      function advisorOf(p) {
+        if (!p) return null;
+        const id = typeof p === "string" ? String(p) : advisorIdForProp(p);
+        if (!id) return null;
+        return data.advisors.find((a) => String(a.id) === id) || null;
+      }
+      function advisorName(id) { return data.advisors.find((a) => String(a.id) === String(id))?.nombre || "—"; }
       function apptAdvisorLine(a, prop) {
-        const id = a?.advisorId || prop?.advisorId || "";
-        const ad = data.advisors.find((x) => x.id === id);
+        const id = a?.advisorId || advisorIdForProp(prop) || "";
+        const ad = data.advisors.find((x) => String(x.id) === String(id));
         if (!ad) return "";
         return [ad.nombre, ad.inmobiliaria].filter(Boolean).join(" · ");
       }
@@ -1823,10 +1857,12 @@
       }
 
       function openLightbox(prop, index) {
-        if (!prop?.fotos?.length) return;
+        if (!prop) return;
+        normalizeProperty(prop);
+        if (!propHasFotos(prop)) return;
         lightbox.open = true;
         lightbox.propertyId = prop.id;
-        lightbox.index = index;
+        lightbox.index = Math.max(0, Math.min(index || 0, prop.fotos.length - 1));
       }
       function closeLightbox() {
         lightbox.open = false;
@@ -2392,11 +2428,156 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
         }
       }
 
+      function nextApptForProp(propertyId) {
+        if (!propertyId) return null;
+        return data.appointments
+          .filter((a) => a.propertyId === propertyId && a.estado !== "Cancelada" && a.estado !== "Realizada")
+          .sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora))[0] || null;
+      }
+      function escapeHtml(s) {
+        return String(s ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+      function overviewPriceChipHtml(p) {
+        const price = money(totalMensual(p)) || "—";
+        return `<div class="overview-price-chip">${escapeHtml(price)}</div>`;
+      }
+      function overviewPinColor(estado) {
+        if (estado === "Descartada") return "#b91c1c";
+        if (estado === "Favorita" || estado === "Visitada") return "#0f766e";
+        if (estado === "Cita confirmada") return "#15803d";
+        if (estado === "Cita solicitada") return "#0369a1";
+        return "#1d4ed8";
+      }
+      function overviewMarkerIcon(color, selected) {
+        return {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: selected ? 13 : 9,
+          fillColor: color,
+          fillOpacity: 1,
+          strokeColor: selected ? "#f59e0b" : "#fff",
+          strokeWeight: selected ? 3.5 : 2.5,
+        };
+      }
+      function setOverviewMarkerHighlight(selectedId) {
+        if (!window.google?.maps) return;
+        overviewMarkers.forEach(({ id, marker, color }) => {
+          const on = !!selectedId && id === selectedId;
+          marker.setIcon(overviewMarkerIcon(color, on));
+          marker.setZIndex(on ? 100 : 10);
+        });
+      }
+      function closeOverviewDetail(opts = {}) {
+        overviewSelectedId.value = null;
+        overviewShowWork.value = false;
+        setOverviewMarkerHighlight(null);
+        if (opts.fit !== false && showOverviewMap.value && overviewMap) fitOverviewAll();
+      }
+      function openOverviewDetail(id) {
+        overviewShowWork.value = false;
+        overviewSelectedId.value = id || null;
+        const p = propOf(id);
+        if (p) normalizeProperty(p);
+        setOverviewMarkerHighlight(id);
+      }
+      function openOverviewWork() {
+        if (overviewShowWork.value) {
+          closeOverviewDetail();
+          return;
+        }
+        overviewSelectedId.value = null;
+        setOverviewMarkerHighlight(null);
+        overviewShowWork.value = true;
+        const w = data.config.trabajo;
+        if (overviewMap && w?.lat != null && w?.lng != null) {
+          overviewMap.panTo({ lat: w.lat, lng: w.lng });
+          const z = overviewMap.getZoom();
+          if (z == null || z < 13) overviewMap.setZoom(14);
+        }
+      }
+      function openOverviewWorkMaps() {
+        const w = data.config.trabajo;
+        if (w?.lat == null || w?.lng == null) return;
+        window.open(`https://www.google.com/maps?q=${w.lat},${w.lng}`, "_blank", "noopener");
+      }
+      function openOverviewProperty() {
+        const id = overviewSelectedId.value;
+        if (!id) return;
+        closeOverviewDetail({ fit: false });
+        openProperty(id);
+      }
+      function openOverviewEnlace() {
+        const p = overviewSelected.value;
+        if (!p?.enlace) { toast("Sin enlace del anuncio", "err"); return; }
+        window.open(p.enlace, "_blank", "noopener");
+      }
+      function openOverviewGallery() {
+        const p = overviewSelected.value;
+        if (!p) return;
+        normalizeProperty(p);
+        if (!propHasFotos(p)) { toast("Sin fotos aún", "err"); return; }
+        openLightbox(p, 0);
+      }
+      function panOverviewToProperty(id) {
+        if (!overviewMap || !id) return;
+        const p = propOf(id);
+        if (p?.lat == null || p?.lng == null) return;
+        overviewMap.panTo({ lat: p.lat, lng: p.lng });
+        const z = overviewMap.getZoom();
+        if (z == null || z < 13) overviewMap.setZoom(14);
+      }
+      function fitOverviewAll() {
+        if (!overviewMap || !overviewMarkers.length) return;
+        const bounds = new google.maps.LatLngBounds();
+        overviewMarkers.forEach(({ marker }) => bounds.extend(marker.getPosition()));
+        const work = data.config.trabajo;
+        if (work?.lat != null && work?.lng != null) bounds.extend({ lat: work.lat, lng: work.lng });
+        overviewMap.fitBounds(bounds);
+      }
+      async function focusOverviewProperty(id) {
+        const p = propOf(id);
+        if (!p) return;
+        if (overviewSelectedId.value === id) {
+          closeOverviewDetail();
+          return;
+        }
+        openOverviewDetail(id);
+        if (!showOverviewMap.value) {
+          showOverviewMap.value = true;
+          await nextTick();
+          await renderOverviewMap({ focusId: id });
+        } else if (!overviewMap) {
+          await renderOverviewMap({ focusId: id });
+        } else {
+          setOverviewMarkerHighlight(id);
+          panOverviewToProperty(id);
+        }
+        nextTick(() => {
+          overviewMapEl.value?.closest(".overview-map-wrap")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
+      }
       async function toggleOverviewMap() {
         showOverviewMap.value = !showOverviewMap.value;
+        if (!showOverviewMap.value) closeOverviewDetail({ fit: false });
         if (showOverviewMap.value) nextTick(() => renderOverviewMap());
       }
-      async function renderOverviewMap() {
+      function refreshOverviewMapLabels() {
+        if (showOverviewMap.value) nextTick(() => renderOverviewMap({ keepView: true }));
+      }
+      function clearOverviewOverlays() {
+        overviewMarkers.forEach(({ marker }) => marker.setMap(null));
+        overviewMarkers = [];
+        overviewPriceWindows.forEach((iw) => iw.close());
+        overviewPriceWindows = [];
+        if (overviewWorkMarker) {
+          overviewWorkMarker.setMap(null);
+          overviewWorkMarker = null;
+        }
+      }
+      async function renderOverviewMap(opts = {}) {
         await ensureMaps();
         await nextTick();
         const el = overviewMapEl.value;
@@ -2405,44 +2586,79 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
           el.innerHTML = `<div class="map-fallback"><p>Configura Google Maps en Ajustes.</p></div>`;
           return;
         }
-        overviewMarkers.forEach((m) => m.setMap(null));
-        overviewMarkers = [];
-        const pts = data.properties.filter((p) => p.lat != null);
+        const keepView = !!opts.keepView && overviewMap;
+        const focusId = opts.focusId || overviewSelectedId.value;
+        const prevCenter = keepView ? overviewMap.getCenter() : null;
+        const prevZoom = keepView ? overviewMap.getZoom() : null;
+        clearOverviewOverlays();
+        const pts = filteredProperties.value.filter((p) => p.lat != null);
         const center = pts[0] ? { lat: pts[0].lat, lng: pts[0].lng } : { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng };
-        overviewMap = new google.maps.Map(el, { center, zoom: 11, mapTypeControl: false, streetViewControl: false });
+        overviewMap = new google.maps.Map(el, {
+          center: prevCenter || center,
+          zoom: prevZoom || 11,
+          mapTypeControl: false,
+          streetViewControl: false,
+          fullscreenControl: false,
+          styles: [
+            { featureType: "poi", stylers: [{ visibility: "off" }] },
+            { featureType: "transit", stylers: [{ visibility: "simplified" }] },
+          ],
+        });
+        overviewMap.addListener("click", () => closeOverviewDetail());
         const bounds = new google.maps.LatLngBounds();
-        const color = (estado) => {
-          if (estado === "Descartada") return "#b91c1c";
-          if (estado === "Favorita" || estado === "Visitada") return "#0f766e";
-          if (estado === "Cita confirmada") return "#15803d";
-          return "#1d4ed8";
-        };
         pts.forEach((p) => {
+          const color = overviewPinColor(p.estado);
+          const selected = focusId === p.id;
           const m = new google.maps.Marker({
             map: overviewMap,
             position: { lat: p.lat, lng: p.lng },
             title: p.alias,
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 8,
-              fillColor: color(p.estado),
-              fillOpacity: 1,
-              strokeColor: "#fff",
-              strokeWeight: 2,
-            },
+            icon: overviewMarkerIcon(color, selected),
+            zIndex: selected ? 100 : 10,
           });
-          m.addListener("click", () => openProperty(p.id));
-          overviewMarkers.push(m);
+          m.addListener("click", (e) => {
+            e?.domEvent?.stopPropagation?.();
+            openOverviewDetail(p.id);
+          });
+          if (overviewMapOpts.showPrice) {
+            const priceIw = new google.maps.InfoWindow({
+              content: overviewPriceChipHtml(p),
+              disableAutoPan: true,
+              pixelOffset: new google.maps.Size(0, -6),
+            });
+            priceIw.open({ map: overviewMap, anchor: m });
+            overviewPriceWindows.push(priceIw);
+          }
+          overviewMarkers.push({ id: p.id, marker: m, color });
           bounds.extend(m.getPosition());
         });
-        // work marker
-        new google.maps.Marker({
-          map: overviewMap,
-          position: { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng },
-          title: "Trabajo (Tec)",
-          label: "T",
-        });
-        if (pts.length) overviewMap.fitBounds(bounds);
+        const work = data.config.trabajo;
+        if (work?.lat != null && work?.lng != null) {
+          overviewWorkMarker = new google.maps.Marker({
+            map: overviewMap,
+            position: { lat: work.lat, lng: work.lng },
+            title: work.nombre || "Trabajo (Tec)",
+            label: { text: "T", color: "#fff", fontWeight: "700" },
+            zIndex: overviewShowWork.value ? 100 : 5,
+          });
+          overviewWorkMarker.addListener("click", (e) => {
+            e?.domEvent?.stopPropagation?.();
+            openOverviewWork();
+          });
+          bounds.extend(overviewWorkMarker.getPosition());
+        }
+        if (focusId && pts.some((p) => p.id === focusId)) {
+          panOverviewToProperty(focusId);
+        } else if (overviewShowWork.value && work?.lat != null) {
+          overviewMap.panTo({ lat: work.lat, lng: work.lng });
+        } else if (!keepView && pts.length) {
+          overviewMap.fitBounds(bounds);
+        }
+        if (overviewSelectedId.value && !pts.some((p) => p.id === overviewSelectedId.value)) {
+          closeOverviewDetail({ fit: false });
+        } else {
+          setOverviewMarkerHighlight(overviewSelectedId.value);
+        }
       }
 
       async function renderDayMap() {
@@ -2661,46 +2877,93 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
         }
       }
 
+      function durationToMin(duration) {
+        if (duration == null) return 0;
+        if (typeof duration === "number" && Number.isFinite(duration)) return Math.max(0, Math.round(duration / 60));
+        if (typeof duration === "object" && duration.seconds != null) {
+          const secs = Number(duration.seconds);
+          return Number.isFinite(secs) ? Math.max(0, Math.round(secs / 60)) : 0;
+        }
+        const secs = Number(String(duration).replace(/s$/i, "").trim());
+        return Number.isFinite(secs) ? Math.max(0, Math.round(secs / 60)) : 0;
+      }
+
       async function calcDayTravel(fecha, opts = {}) {
         const silent = !!opts.silent;
         const appts = data.appointments.filter((a) => a.fecha === fecha && a.estado !== "Cancelada");
-        const byId = new Map(appts.map((a) => [a.propertyId, propOf(a.propertyId)]).filter(([, p]) => p?.lat != null));
+        if (!appts.length) {
+          if (!silent) toast("No hay citas este día", "err");
+          return false;
+        }
+        const byId = new Map();
+        for (const a of appts) {
+          const p = propOf(a.propertyId);
+          if (p?.lat != null && p?.lng != null) byId.set(p.id, p);
+        }
         for (const id of opts.extraPropertyIds || []) {
           const p = propOf(id);
-          if (p?.lat != null) byId.set(p.id, p);
+          if (p?.lat != null && p?.lng != null) byId.set(p.id, p);
         }
         const props = [...byId.values()];
         if (props.length < 2) {
-          if (!silent) toast("Se necesitan al menos 2 propiedades ubicadas", "err");
+          if (!silent) {
+            toast(
+              props.length
+                ? "Solo hay 1 propiedad ubicada; se necesitan al menos 2 con coordenadas"
+                : "Las citas del día no tienen coordenadas; geocodifica las propiedades",
+              "err"
+            );
+          }
           return false;
         }
         if (!data.config.mapsKey) {
-          if (!silent) toast("Falta API key de Maps", "err");
+          if (!silent) toast("Falta API key de Maps en Ajustes", "err");
           return false;
         }
         mapsBusy.value = true;
         try {
           const rows = await computeRouteMatrix(props, props);
           const list = Array.isArray(rows) ? rows : [];
+          let saved = 0;
           for (const r of list) {
-            if (r.originIndex === r.destinationIndex) continue;
+            if (r == null || r.originIndex === r.destinationIndex) continue;
+            if (r.condition && r.condition !== "ROUTE_EXISTS") continue;
             const from = props[r.originIndex], to = props[r.destinationIndex];
             if (!from || !to) continue;
-            const secs = Number(String(r.duration || "").replace("s", "")) || 0;
+            const min = durationToMin(r.duration);
+            const km = r.distanceMeters != null ? +(Number(r.distanceMeters) / 1000).toFixed(1) : null;
+            if (!min && km == null) continue;
             setTravel(from, to, {
-              min: Math.round(secs / 60),
-              km: r.distanceMeters ? +(r.distanceMeters / 1000).toFixed(1) : null,
+              min: min || Math.max(5, Math.round((km || 0) * 2.5)),
+              km,
               fuente: "real",
               fecha: new Date().toISOString(),
             });
+            saved += 1;
           }
           persist();
-          if (!silent) toast("Traslados del día calculados", "ok");
-          return true;
+          if (!silent) {
+            if (saved) toast(`Traslados del día listos (${saved} rutas)`, "ok");
+            else toast("Routes no devolvió rutas útiles. Revisa la API key y el billing de Routes.", "err");
+          }
+          return saved > 0;
         } catch (e) {
           if (!silent) toast(e.message || "Error Routes API", "err");
           return false;
         } finally { mapsBusy.value = false; }
+      }
+
+      async function calcDayTravelBtn() {
+        await ensureMaps();
+        if (!data.config.mapsKey) {
+          toast("Configura Google Maps en Ajustes", "err");
+          return;
+        }
+        if (!mapsReady.value) {
+          toast("No se pudo cargar Google Maps", "err");
+          return;
+        }
+        await calcDayTravel(agendaDay.value);
       }
 
       const customCatForm = reactive({ label: "", query: "" });
@@ -2971,7 +3234,7 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
       }
       function whatsappForAppt(a) {
         const p = propOf(a.propertyId);
-        const ad = data.advisors.find((x) => x.id === (a.advisorId || p?.advisorId));
+        const ad = data.advisors.find((x) => String(x.id) === String(a.advisorId || advisorIdForProp(p) || ""));
         if (!ad) { toast("Sin asesor", "err"); return; }
         const msg = `Hola ${ad.nombre}, confirmo la visita a "${p?.alias}" el ${formatDay(a.fecha)} a las ${a.hora}. ¿Nos vemos ahí?`;
         openWhatsApp(ad.whatsapp || ad.telefono, msg);
@@ -2987,6 +3250,8 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
         const fixed = existing.filter((a) => a.estado === "Confirmada" || a.estado === "Reprogramada");
         const semi = existing.filter((a) => a.estado === "Solicitada");
         const freeAppts = existing.filter((a) => a.estado === "Por solicitar");
+        const knownIds = new Set([...fixed, ...semi, ...freeAppts].map((a) => a.id));
+        const otherAppts = existing.filter((a) => !knownIds.has(a.id));
 
         const occupiedIds = new Set(existing.map((a) => a.propertyId));
         const candidates = eligibleProperties.value
@@ -3012,6 +3277,7 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
         }
         fixed.forEach((a) => placeFixed(a, "Confirmada (fija)", "confirmed"));
         semi.forEach((a) => placeFixed(a, "Solicitada (semifija)", "solicitada"));
+        otherAppts.forEach((a) => placeFixed(a, a.estado || "Agendada", "solicitada"));
 
         const movable = freeAppts.map((a) => ({ appt: a, prop: propOf(a.propertyId) })).filter((x) => x.prop);
         const newCandidates = candidates.map((p) => ({ appt: null, prop: p }));
@@ -3134,11 +3400,16 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
           warnings.push("Hay tramos sin dato de traslado. Usa «Calcular traslados del día» o captura tiempos manuales.");
         }
 
+        const fixedCount = slots.filter((s) => s.fixed).length;
+        const newCount = slots.length - fixedCount;
         return {
           fecha,
           generatedAt: new Date().toISOString(),
           source: "local",
-          summary: "",
+          summary: `Plan local: ${slots.length} parada(s)`
+            + (fixedCount ? ` · ${fixedCount} fija(s)` : "")
+            + (newCount ? ` · ${newCount} propuesta(s)` : "")
+            + ` · ${formatDay(fecha)}.`,
           slots,
           warnings,
           suggestions,
@@ -3241,18 +3512,78 @@ La hora mínima después de una cita es exactamente hora+duracion+traslado en ca
         }
       }
 
+      function ensureAgendaDay(fecha) {
+        if (!fecha || data.config.dias.some((d) => d.fecha === fecha)) return;
+        data.config.dias.push({
+          fecha,
+          label: formatDayShort(fecha) || "Día",
+          desde: "09:00",
+          hasta: "20:00",
+        });
+        data.config.dias.sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)));
+        persist();
+      }
+
+      function pickAgendaDayWithAppts() {
+        const appts = [...data.appointments]
+          .filter((a) => a.estado !== "Cancelada" && a.estado !== "Realizada" && a.fecha)
+          .sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
+        if (!appts.length) return null;
+        const inConfig = appts.find((a) => data.config.dias.some((d) => d.fecha === a.fecha));
+        const fecha = (inConfig || appts[0]).fecha;
+        ensureAgendaDay(fecha);
+        return fecha;
+      }
+
+      async function openDayPlanner() {
+        const fecha = pickAgendaDayWithAppts();
+        if (fecha) agendaDay.value = fecha;
+        view.value = "agenda";
+        agendaMode.value = "planner";
+        await nextTick();
+        if (!dayAppts.value.length) {
+          toast("No hay citas para planificar. Elige otro día o agenda una visita.", "err");
+          return;
+        }
+        await runPlanner();
+      }
+
+      function askAIWithTimeout(messages, ms = 25000) {
+        return Promise.race([
+          askAI(messages),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms)),
+        ]);
+      }
+
+      async function calcPlannerTravel() {
+        const fecha = agendaDay.value;
+        if (!dayAppts.value.length) { toast("No hay citas este día", "err"); return; }
+        await ensureMaps();
+        await calcDayTravel(fecha);
+      }
+
       async function runPlanner() {
         const fecha = agendaDay.value;
         const day = data.config.dias.find((d) => d.fecha === fecha);
-        if (!day) { toast("Día no configurado", "err"); return; }
+        if (!day) { toast("Día no configurado en Ajustes", "err"); return; }
+        if (!dayAppts.value.length) { toast("No hay citas este día", "err"); return; }
         plannerBusy.value = true;
         try {
+          await ensureMaps();
           await calcDayTravel(fecha, { silent: true });
-          let plan = null;
+
+          let plan = buildLocalDayPlan(fecha);
+          if (!plan?.slots?.length) {
+            toast("No se pudo armar un plan con las citas de este día", "err");
+            return;
+          }
+          saveDayPlan(plan);
+
           if (data.config.openaiKey) {
+            toast("Plan local listo — mejorando con IA…", "ok");
             try {
               const ctx = buildDayPlanAiContext(fecha);
-              const content = await askAI([
+              const content = await askAIWithTimeout([
                 {
                   role: "system",
                   content: `Eres el planificador de visitas de HomeFinder (renta en Monterrey).
@@ -3262,21 +3593,22 @@ Reglas: Confirmada/Reprogramada son fijas; Solicitada es semifija (no muevas su 
                 { role: "user", content: JSON.stringify(ctx) },
               ]);
               const parsed = JSON.parse(String(content || "").replace(/```json|```/g, "").trim());
-              plan = normalizeAiDayPlan(parsed, fecha);
-              if (!plan || !plan.slots.length) plan = null;
+              const aiPlan = normalizeAiDayPlan(parsed, fecha);
+              if (aiPlan?.slots?.length) {
+                saveDayPlan(aiPlan);
+                toast("Propuesta con IA lista", "ok");
+                return;
+              }
+              toast("IA sin slots útiles — se mantiene el plan local", "err");
             } catch (e) {
-              plan = null;
-              toast("IA no disponible — plan local", "err");
+              toast(e?.message === "timeout" ? "IA tardó demasiado — plan local" : "IA no disponible — plan local", "err");
             }
+            return;
           }
-          if (!plan) plan = buildLocalDayPlan(fecha);
-          if (!plan) { toast("No se pudo generar propuesta", "err"); return; }
-          saveDayPlan(plan);
-          toast(
-            plan.source === "ai" ? "Propuesta con IA lista"
-              : (data.config.openaiKey ? "Propuesta local lista" : "Sin IA — plan local"),
-            "ok"
-          );
+
+          toast("Propuesta local lista", "ok");
+        } catch (e) {
+          toast(e?.message || "No se pudo generar la propuesta", "err");
         } finally {
           plannerBusy.value = false;
         }
@@ -3490,7 +3822,7 @@ Reglas: Confirmada/Reprogramada son fijas; Solicitada es semifija (no muevas su 
           const pre = scoreEval(p, "pre", data.config.ponderaciones);
           const post = scoreEval(p, "post", data.config.ponderaciones);
           const comentarios = (p.comentarios || []).slice(0, 3).map((c) => `${c.autor}: ${c.texto}`).join(" | ") || "ninguno";
-          lines.push(`- [${p.id}] ${p.alias} | colonia=${p.colonia} | estado=${p.estado} | registradoPor=${p.registradoPor || "?"} | vistoAtziri=${p.vistos?.Atziri ? "si" : "no"} | vistoBrandon=${p.vistos?.Brandon ? "si" : "no"} | renta=${p.costos?.renta} | totalMes=${totalMensual(p)} | amueblado=${p.amueblado} | perros=${p.perros?.acepta} | descarte=${p.descarte ? p.descarte.motivo : "no"} | alTec=${p.trasladoTrabajo?.min ?? "Sin dato"}min(${p.trasladoTrabajo?.fuente || ""}) | pre=${pre.score?.toFixed(2) ?? "Sin evaluar"}(${pre.pct}%) | post=${post.score?.toFixed(2) ?? "Sin evaluar"}(${post.pct}%) | jardin=${p.espacios?.jardin} | favorita=${p.favorita} | asesor=${advisorName(p.advisorId)} | comentarios=[${comentarios}]`);
+          lines.push(`- [${p.id}] ${p.alias} | colonia=${p.colonia} | estado=${p.estado} | registradoPor=${p.registradoPor || "?"} | vistoAtziri=${haVisto(p, "Atziri") ? "si" : "no"} | vistoBrandon=${haVisto(p, "Brandon") ? "si" : "no"} | renta=${p.costos?.renta} | totalMes=${totalMensual(p)} | amueblado=${p.amueblado} | perros=${p.perros?.acepta} | descarte=${p.descarte ? p.descarte.motivo : "no"} | alTec=${p.trasladoTrabajo?.min ?? "Sin dato"}min(${p.trasladoTrabajo?.fuente || ""}) | pre=${pre.score?.toFixed(2) ?? "Sin evaluar"}(${pre.pct}%) | post=${post.score?.toFixed(2) ?? "Sin evaluar"}(${post.pct}%) | jardin=${p.espacios?.jardin} | favorita=${p.favorita} | asesor=${advisorName(p.advisorId)} | comentarios=[${comentarios}]`);
         }
         lines.push("\nASESORES:");
         for (const a of data.advisors) {
@@ -3790,7 +4122,8 @@ Contexto:\n${buildContext()}`;
         applyRankFilter, clearRankFilterCol, clearAllRankFilters, rankAnyFilterActive,
         rankFilterModalTitle, rankFilterModalType,
         compareIds, showCompare, secs,
-        mapsReady, mapsBusy, propMapEl, propTabsEl, dayMapEl, overviewMapEl, showOverviewMap,
+        mapsReady, mapsBusy, propMapEl, propTabsEl, dayMapEl, overviewMapEl, showOverviewMap, overviewMapOpts,
+        overviewSelectedId, overviewShowWork, overviewSelected, overviewSelectedAppt, overviewSelectedFotos, closeOverviewDetail, openOverviewWork, openOverviewWorkMaps, openOverviewProperty, openOverviewEnlace, openOverviewGallery, focusOverviewProperty, propFotos, propHasFotos,
         aiOpen, aiInput, aiMessages, aiBusy, aiSummarizing, pendingActions, aiMsgs,
         activeAiSummary, formatAiChatLabel,
         // computed
@@ -3820,9 +4153,9 @@ Contexto:\n${buildContext()}`;
         travelBetween, calcDayTravel, calcWorkTravelFor, onCoordsChange, saveManualTravel, formatTrasladoMeasure, geocodeProperty,
         allPlaceCats, customCatForm, serviciosOf, formatServicioLine, openServicioRoute,
         searchBasicPlaces, searchOnePlace, addCustomPlaceCat, removeCustomPlaceCat,
-        openInMaps, navigateTo, toggleOverviewMap, mapQuery,
+        openInMaps, navigateTo, toggleOverviewMap, refreshOverviewMapLabels, mapQuery,
         openWhatsApp, whatsappForProp, whatsappForAppt,
-        runPlanner, applyPlanner, discardDayPlan, toggleCompare,
+        openDayPlanner, runPlanner, calcPlannerTravel, calcDayTravelBtn, applyPlanner, discardDayPlan, toggleCompare,
         toggleSec, addVisitDay, exportBackup, importBackup, restoreBackup,
         retrySync, forcePull, forcePush, resolveConflict, onMapsKeyChange,
         sendAI, openAiPanel, newAiChat, selectAiChat, deleteAiChat, applyAIActions, openPasteAd, extractAd, saveExtracted,

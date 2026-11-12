@@ -45,7 +45,7 @@
           <button class="quick-btn" @click="openQuickAdd"><i class="ph ph-plus-circle"></i>Nueva propiedad<span>Registro rápido</span></button>
           <button class="quick-btn" @click="openPasteAd"><i class="ph ph-clipboard-text"></i>Pegar anuncio<span>Extracción con IA</span></button>
           <button class="quick-btn" @click="openApptForm()"><i class="ph ph-calendar-plus"></i>Nueva cita<span>Agendar visita</span></button>
-          <button class="quick-btn" @click="view='agenda'; agendaMode='planner'"><i class="ph ph-path"></i>Planificar día<span>Optimizar recorridos</span></button>
+          <button class="quick-btn" @click="openDayPlanner"><i class="ph ph-path"></i>Planificar día<span>Optimizar recorridos</span></button>
         </div>
         <div class="grid-2 gap-16">
           <div class="card">
@@ -116,13 +116,75 @@
             <option value="">Registrado por</option>
             <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
           </select>
-          <label class="row small"><input type="checkbox" v-model="propFilter.pendienteVer" /> Pendiente de que yo vea</label>
+          <select class="select" v-model="propFilter.pendienteVer" style="width:auto">
+            <option value="">Pendiente de ver</option>
+            <option v-for="per in PERSONAS" :key="'pv-'+per" :value="per">Pendiente que vea {{ per }}</option>
+          </select>
           <button class="btn btn-sm" :class="showOverviewMap?'btn-primary':''" @click="toggleOverviewMap">Mapa</button>
         </div>
-        <div v-show="showOverviewMap" class="map-box tall mb-12" ref="overviewMapEl"></div>
+        <div v-show="showOverviewMap" class="overview-map-wrap mb-12">
+          <div class="overview-map-toolbar">
+            <label class="overview-price-toggle">
+              <input type="checkbox" v-model="overviewMapOpts.showPrice" @change="refreshOverviewMapLabels" />
+              <span>Mostrar precios</span>
+            </label>
+            <span class="tiny muted">Toca un punto para ver el detalle</span>
+          </div>
+          <div class="overview-map-stage">
+            <div class="map-box tall overview-map" ref="overviewMapEl"></div>
+            <div class="overview-detail-card" v-if="overviewShowWork" @click.stop>
+              <button type="button" class="od-close" @click="closeOverviewDetail" title="Cerrar"><i class="ph ph-x"></i></button>
+              <div class="od-title">{{ data.config.trabajo.nombre || 'Trabajo (Tec)' }}</div>
+              <div class="od-price">Punto de trabajo</div>
+              <div class="od-row"><span>Uso</span><strong>Referencia para traslados y rutas</strong></div>
+              <div class="od-row"><span>Lat</span><strong>{{ data.config.trabajo.lat }}</strong></div>
+              <div class="od-row"><span>Lng</span><strong>{{ data.config.trabajo.lng }}</strong></div>
+              <button type="button" class="od-open" @click="openOverviewWorkMaps">Abrir en Maps</button>
+            </div>
+            <div class="overview-detail-card" v-else-if="overviewSelected" @click.stop>
+              <button type="button" class="od-close" @click="closeOverviewDetail" title="Cerrar"><i class="ph ph-x"></i></button>
+              <button
+                v-if="overviewSelectedFotos.length"
+                type="button"
+                class="od-cover"
+                @click="openOverviewGallery"
+                title="Ver galería"
+              >
+                <img :src="overviewSelectedFotos[0].thumb || overviewSelectedFotos[0].url" alt="" />
+                <span class="od-cover-count" v-if="overviewSelectedFotos.length > 1">{{ overviewSelectedFotos.length }} fotos</span>
+              </button>
+              <div class="od-title">{{ overviewSelected.alias || 'Propiedad' }}</div>
+              <div class="od-price">{{ money(totalMensual(overviewSelected)) || 'Sin renta' }}</div>
+              <div class="od-row"><span>Colonia</span><strong>{{ overviewSelected.colonia || '—' }}</strong></div>
+              <div class="od-row"><span>Dirección</span><strong>{{ formatDireccionMX(overviewSelected) || '—' }}</strong></div>
+              <div class="od-row"><span>Estado</span><strong>{{ overviewSelected.estado || '—' }}</strong></div>
+              <div class="od-row">
+                <span>Cita</span>
+                <strong :class="overviewSelectedAppt ? 'od-appt' : 'od-muted'">
+                  <template v-if="overviewSelectedAppt">{{ overviewSelectedAppt.estado }} · {{ formatDayShort(overviewSelectedAppt.fecha) }} {{ overviewSelectedAppt.hora }}</template>
+                  <template v-else>Sin cita agendada</template>
+                </strong>
+              </div>
+              <div class="od-row"><span>Amueblado</span><strong>{{ amuebladoLabel(overviewSelected.amueblado) }}</strong></div>
+              <div class="od-row"><span>Perros</span><strong>{{ overviewSelected.perros?.acepta==='si' ? 'Sí' : overviewSelected.perros?.acepta==='no' ? 'No' : 'Por confirmar' }}</strong></div>
+              <div class="od-actions">
+                <button type="button" class="od-action" :disabled="!overviewSelected.enlace" @click="openOverviewEnlace" title="Abrir anuncio">
+                  <i class="ph ph-arrow-square-out"></i><span>Anuncio</span>
+                </button>
+                <button type="button" class="od-action" :disabled="!advisorOf(overviewSelected)" @click="whatsappForProp(overviewSelected)" title="WhatsApp asesor">
+                  <i class="ph ph-whatsapp-logo"></i><span>WhatsApp</span>
+                </button>
+                <button type="button" class="od-action" :disabled="!overviewSelectedFotos.length" @click="openOverviewGallery" title="Ver fotos">
+                  <i class="ph ph-images"></i><span>Fotos{{ overviewSelectedFotos.length ? ' · ' + overviewSelectedFotos.length : '' }}</span>
+                </button>
+              </div>
+              <button type="button" class="od-open" @click="openOverviewProperty">Ver ficha</button>
+            </div>
+          </div>
+        </div>
         <div v-if="!filteredProperties.length" class="empty"><i class="ph ph-house"></i><p>Sin propiedades. Registra la primera.</p></div>
         <div class="prop-grid">
-          <article v-for="p in filteredProperties" :key="p.id" class="prop-card" :class="{discarded: p.estado==='Descartada'}" @click="openProperty(p.id)">
+          <article v-for="p in filteredProperties" :key="p.id" class="prop-card" :class="{discarded: p.estado==='Descartada', selected: overviewSelectedId===p.id}" @click="focusOverviewProperty(p.id)">
             <div class="prop-thumb">
               <img v-if="p.fotos?.[0]?.thumb || p.fotos?.[0]?.url" :src="p.fotos[0].thumb || p.fotos[0].url" alt="" />
               <i v-else class="ph ph-house-line" style="font-size:2rem"></i>
@@ -171,7 +233,7 @@
           <div class="row">
             <button class="btn btn-sm" :class="agendaMode==='day'?'btn-primary':''" @click="agendaMode='day'">Día</button>
             <button class="btn btn-sm" :class="agendaMode==='itinerary'?'btn-primary':''" @click="agendaMode='itinerary'">Itinerario</button>
-            <button class="btn btn-sm" :class="agendaMode==='planner'?'btn-primary':''" @click="agendaMode='planner'">Planificar</button>
+            <button class="btn btn-sm" type="button" :class="agendaMode==='planner'?'btn-primary':''" :disabled="plannerBusy" @click="openDayPlanner">{{ plannerBusy ? 'Planificando…' : 'Planificar' }}</button>
             <button class="btn btn-primary" @click="openApptForm()"><i class="ph ph-plus"></i></button>
           </div>
         </div>
@@ -188,37 +250,46 @@
         <template v-if="agendaMode==='day'">
           <div class="row mb-12">
             <span class="small muted grow">{{ dayWindowLabel(agendaDay) }}</span>
-            <button class="btn btn-sm" @click="calcDayTravel(agendaDay)" :disabled="!mapsReady || mapsBusy">
-              <i class="ph ph-path"></i> Calcular traslados del día
+            <button class="btn btn-sm" type="button" @click="calcDayTravelBtn" :disabled="mapsBusy">
+              <i class="ph ph-path"></i> {{ mapsBusy ? 'Calculando…' : 'Calcular traslados del día' }}
             </button>
           </div>
           <div class="map-box mb-12" ref="dayMapEl"></div>
           <div class="timeline" v-if="dayAppts.length">
-            <div v-for="a in dayAppts" :key="a.id" class="appt" :class="apptClass(a)">
-              <div>
-                <div class="appt-time">{{ a.hora }}</div>
-                <div class="appt-dur">{{ a.duracion || 45 }} min</div>
-              </div>
-              <div>
-                <div class="row">
-                  <strong>{{ propName(a.propertyId) }}</strong>
-                  <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
-                  <span v-if="apptHasConflict(a)" class="badge badge-danger">Conflicto</span>
+            <template v-for="(a, idx) in dayAppts" :key="a.id">
+              <div class="appt" :class="apptClass(a)">
+                <div>
+                  <div class="appt-time">{{ a.hora }}</div>
+                  <div class="appt-dur">{{ a.duracion || 45 }} min</div>
                 </div>
-                <div class="small muted">{{ propOf(a.propertyId)?.colonia }}<span v-if="apptAdvisorLine(a, propOf(a.propertyId))"> · {{ apptAdvisorLine(a, propOf(a.propertyId)) }}</span></div>
-                <div class="row mt-8">
-                  <button class="btn btn-sm" type="button" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i></button>
-                  <button class="btn btn-sm" type="button" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i></button>
+                <div>
+                  <div class="row">
+                    <strong>{{ propName(a.propertyId) }}</strong>
+                    <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
+                    <span v-if="apptHasConflict(a)" class="badge badge-danger">Conflicto</span>
+                  </div>
+                  <div class="small muted">{{ propOf(a.propertyId)?.colonia }}<span v-if="apptAdvisorLine(a, propOf(a.propertyId))"> · {{ apptAdvisorLine(a, propOf(a.propertyId)) }}</span></div>
+                  <div class="row mt-8">
+                    <button class="btn btn-sm" type="button" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i></button>
+                    <button class="btn btn-sm" type="button" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i></button>
+                  </div>
+                </div>
+                <div class="appt-kebab" @click.stop>
+                  <button class="icon-btn" type="button" title="Opciones" @click="toggleApptMenu(a.id)"><i class="ph ph-dots-three-vertical"></i></button>
+                  <div class="menu-pop" v-if="apptMenuId===a.id">
+                    <button type="button" @click="editApptFromMenu(a)">Editar</button>
+                    <button type="button" class="danger" @click="deleteApptFromMenu(a.id)">Eliminar</button>
+                  </div>
                 </div>
               </div>
-              <div class="appt-kebab" @click.stop>
-                <button class="icon-btn" type="button" title="Opciones" @click="toggleApptMenu(a.id)"><i class="ph ph-dots-three-vertical"></i></button>
-                <div class="menu-pop" v-if="apptMenuId===a.id">
-                  <button type="button" @click="editApptFromMenu(a)">Editar</button>
-                  <button type="button" class="danger" @click="deleteApptFromMenu(a.id)">Eliminar</button>
-                </div>
+              <div v-if="idx < dayAppts.length - 1" class="travel-note" :class="{missing: travelBetween(a, dayAppts[idx+1])?.fuente !== 'real'}">
+                <template v-if="travelBetween(a, dayAppts[idx+1])">
+                  Traslado → {{ travelBetween(a, dayAppts[idx+1]).min }} min
+                  <span class="faint">({{ travelBetween(a, dayAppts[idx+1]).fuente }})</span>
+                </template>
+                <template v-else>Traslado sin dato</template>
               </div>
-            </div>
+            </template>
           </div>
           <div v-else class="empty"><i class="ph ph-calendar-blank"></i><p>Sin citas este día.</p></div>
         </template>
@@ -231,6 +302,14 @@
                 <strong>{{ a.hora }}</strong>
                 <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
                 <span v-if="apptHasConflict(a)" class="badge badge-danger">Conflicto</span>
+                <span class="grow"></span>
+                <div class="appt-kebab" @click.stop>
+                  <button class="icon-btn" type="button" title="Opciones" @click="toggleApptMenu(a.id)"><i class="ph ph-dots-three-vertical"></i></button>
+                  <div class="menu-pop" v-if="apptMenuId===a.id">
+                    <button type="button" @click="editApptFromMenu(a)">Editar</button>
+                    <button type="button" class="danger" @click="deleteApptFromMenu(a.id)">Eliminar</button>
+                  </div>
+                </div>
               </div>
               <h3>{{ propName(a.propertyId) }}</h3>
               <p class="small muted">{{ propOf(a.propertyId)?.direccion || '' }} · {{ propOf(a.propertyId)?.colonia }}</p>
@@ -252,14 +331,26 @@
         </template>
 
         <template v-if="agendaMode==='planner'">
-          <div class="card mb-12">
-            <p class="small muted mb-12">Calcula traslados con Maps y, si hay OpenAI, pide una propuesta. Sin IA usa el planificador local. Regenerar sobrescribe el plan del día.</p>
-            <div class="row">
-              <button class="btn btn-primary" @click="runPlanner" :disabled="plannerBusy">{{ plannerBusy ? 'Generando…' : 'Generar propuesta' }}</button>
-              <button class="btn" @click="calcDayTravel(agendaDay)" :disabled="!mapsReady || mapsBusy">Calcular traslados</button>
+          <div v-if="plannerBusy" class="empty mb-12"><i class="ph ph-spinner"></i><p>Generando propuesta del día…</p></div>
+          <div v-else-if="!dayAppts.length" class="empty mb-12"><i class="ph ph-calendar-blank"></i><p>Sin citas este día. Elige otra pestaña o agenda una visita.</p></div>
+          <div v-else-if="!plannerResult" class="card mb-12">
+            <p class="small muted mb-12">Pulsa <strong>Planificar</strong> otra vez para generar la propuesta de este día.</p>
+            <div class="small muted mb-8">{{ dayAppts.length }} cita{{ dayAppts.length === 1 ? '' : 's' }} · {{ formatDay(agendaDay) }}</div>
+            <div v-for="a in dayAppts" :key="'pl-'+a.id" class="list-item" style="padding:8px 0">
+              <div class="grow">
+                <div class="row"><strong>{{ a.hora }}</strong> <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span></div>
+                <div class="small">{{ propName(a.propertyId) }} · {{ propOf(a.propertyId)?.colonia || 'Sin colonia' }}</div>
+              </div>
+              <div class="appt-kebab" @click.stop>
+                <button class="icon-btn" type="button" title="Opciones" @click="toggleApptMenu(a.id)"><i class="ph ph-dots-three-vertical"></i></button>
+                <div class="menu-pop" v-if="apptMenuId===a.id">
+                  <button type="button" @click="editApptFromMenu(a)">Editar</button>
+                  <button type="button" class="danger" @click="deleteApptFromMenu(a.id)">Eliminar</button>
+                </div>
+              </div>
             </div>
           </div>
-          <div v-if="plannerResult">
+          <div v-if="plannerResult && !plannerBusy">
             <div class="row mb-12">
               <span class="badge" :class="plannerResult.source==='ai' ? 'badge-accent' : 'badge-info'">{{ plannerResult.source==='ai' ? 'IA' : 'Local' }}</span>
               <span class="tiny muted" v-if="plannerResult.generatedAt">{{ formatCommentDate(plannerResult.generatedAt) || plannerResult.generatedAt }}</span>
@@ -954,18 +1045,25 @@
             <div class="collab-box mt-16">
               <div class="row mb-8">
                 <h4 class="grow">Colaboración Atziri / Brandon</h4>
-                <button class="btn btn-sm btn-primary" type="button" @click="marcarVistoYo(editingProp)">Ya la vi ({{ data.config.personaActiva }})</button>
+                <button
+                  v-if="editingProp.registradoPor !== data.config.personaActiva"
+                  class="btn btn-sm btn-primary"
+                  type="button"
+                  @click="marcarVistoYo(editingProp)"
+                >Ya la vi ({{ data.config.personaActiva }})</button>
+                <span v-else class="tiny muted">{{ data.config.personaActiva }} ya cuenta (la registró)</span>
               </div>
               <div class="visto-toggles">
-                <label class="visto-toggle" :class="{on: haVisto(editingProp,'Atziri')}">
-                  <input type="checkbox" :checked="haVisto(editingProp,'Atziri')" @change="toggleVisto(editingProp,'Atziri')" />
-                  Atziri ya la vio
-                  <span class="tiny faint" v-if="editingProp.vistos?.Atziri">{{ formatCommentDate(editingProp.vistos.Atziri) }}</span>
-                </label>
-                <label class="visto-toggle" :class="{on: haVisto(editingProp,'Brandon')}">
-                  <input type="checkbox" :checked="haVisto(editingProp,'Brandon')" @change="toggleVisto(editingProp,'Brandon')" />
-                  Brandon ya la vio
-                  <span class="tiny faint" v-if="editingProp.vistos?.Brandon">{{ formatCommentDate(editingProp.vistos.Brandon) }}</span>
+                <label
+                  v-for="per in PERSONAS"
+                  :key="'visto-'+per"
+                  v-show="editingProp.registradoPor !== per"
+                  class="visto-toggle"
+                  :class="{on: haVisto(editingProp, per)}"
+                >
+                  <input type="checkbox" :checked="haVisto(editingProp, per)" @change="toggleVisto(editingProp, per)" />
+                  {{ per }} ya la vio
+                  <span class="tiny faint" v-if="editingProp.vistos?.[per]">{{ formatCommentDate(editingProp.vistos[per]) }}</span>
                 </label>
               </div>
               <h4 class="mt-16 mb-8">Comentarios</h4>
