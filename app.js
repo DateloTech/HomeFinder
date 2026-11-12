@@ -3810,6 +3810,62 @@ Reglas: Confirmada/Reprogramada son fijas; Solicitada es semifija (no muevas su 
         return when ? `${title} · ${when}` : title;
       }
 
+      function formatPropServiciosAi(p) {
+        const map = p?.servicios && typeof p.servicios === "object" ? p.servicios : {};
+        const cats = allPlaceCats.value;
+        const parts = [];
+        let total = 0;
+        let catsWithData = 0;
+        for (const cat of cats) {
+          const list = Array.isArray(map[cat.key]) ? map[cat.key].filter(Boolean) : [];
+          if (!list.length) continue;
+          catsWithData += 1;
+          total += list.length;
+          const items = list.map((s) => {
+            const dist = [
+              s.min != null ? `${s.min}min` : null,
+              s.km != null ? `${s.km}km` : null,
+            ].filter(Boolean).join("/");
+            return `${s.nombre || "sin nombre"}${dist ? `(${dist})` : ""}`;
+          }).join(", ");
+          parts.push(`${cat.label}[${list.length}]: ${items}`);
+        }
+        if (!parts.length) return "serviciosCercanos=sin_dato (aún no buscados en la ficha)";
+        return `serviciosCount=${total} categoriasConDato=${catsWithData} | ${parts.join(" || ")}`;
+      }
+
+      function formatPropFichaAi(p) {
+        const pre = scoreEval(p, "pre", data.config.ponderaciones);
+        const post = scoreEval(p, "post", data.config.ponderaciones);
+        const c = p.costos || {};
+        const f = p.fisicas || {};
+        const e = p.espacios || {};
+        const am = p.amenidades?.items || {};
+        const reqs = (p.requisitos?.items || [])
+          .filter((r) => r.estado && r.estado !== "no_solicitado")
+          .map((r) => `${r.nombre}:${r.estado}${r.costo != null ? `($${r.costo})` : ""}`)
+          .join(", ") || "ninguno_activo";
+        const citasN = data.appointments.filter((a) => a.propertyId === p.id && a.estado !== "Cancelada").length;
+        const comentarios = (p.comentarios || []).slice(0, 3).map((x) => `${x.autor}: ${x.texto}`).join(" | ") || "ninguno";
+        const espacios = Object.entries(e).filter(([, v]) => v && v !== "pc").map(([k, v]) => `${k}=${v}`).join(",") || "sin_dato";
+        const amenidades = Object.entries(am).filter(([, v]) => v === "si" || v === true).map(([k]) => k).join(",") || "sin_dato";
+        return [
+          `[${p.id}] ${p.alias || "Sin nombre"}`,
+          `colonia=${p.colonia || "—"} | direccion=${formatDireccionMX(p) || p.direccion || "—"} | estado=${p.estado || "—"}`,
+          `registradoPor=${p.registradoPor || "?"} | vistoAtziri=${haVisto(p, "Atziri") ? "si" : "no"} | vistoBrandon=${haVisto(p, "Brandon") ? "si" : "no"} | favorita=${!!p.favorita}`,
+          `renta=${c.renta ?? "—"} | mant=${c.mantenimiento ?? "—"} | deposito=${c.deposito ?? "—"} | totalMes=${totalMensual(p) ?? "—"} | desembolso=${desembolsoInicial(p) ?? "—"} | serviciosIncluidos=${c.serviciosIncluidos || "—"}`,
+          `rec=${f.recamaras ?? "—"} | banos=${f.banos ?? "—"} | estac=${f.estacionamiento ?? "—"} | m2=${f.m2Const ?? "—"} | amueblado=${p.amueblado || "—"}`,
+          `perros=${p.perros?.acepta || "—"} | perrosNota=${p.perros?.notas || "—"}`,
+          `espacios={${espacios}} | amenidadesSi={${amenidades}}`,
+          `alTec=${p.trasladoTrabajo?.min ?? "Sin dato"}min / ${p.trasladoTrabajo?.km ?? "?"}km (${p.trasladoTrabajo?.fuente || "—"})`,
+          formatPropServiciosAi(p),
+          `requisitos=[${reqs}] | contrato=${p.requisitos?.duracionContrato || "—"} | condiciones=${p.requisitos?.condiciones || "—"}`,
+          `pre=${pre.score?.toFixed(2) ?? "Sin evaluar"}(${pre.pct}%) | post=${post.score?.toFixed(2) ?? "Sin evaluar"}(${post.pct}%)`,
+          `asesor=${advisorName(advisorIdForProp(p)) || advisorName(p.advisorId)} | citasActivas=${citasN} | descarte=${p.descarte ? p.descarte.motivo : "no"}`,
+          `comentarios=[${comentarios}] | obs=${(p.observaciones || "").slice(0, 160) || "—"}`,
+        ].join("\n  ");
+      }
+
       function buildContext() {
         const lines = [];
         lines.push(`Fecha actual del sistema: ${new Date().toISOString()}`);
@@ -3817,12 +3873,9 @@ Reglas: Confirmada/Reprogramada son fijas; Solicitada es semifija (no muevas su 
         lines.push(`Punto de trabajo: ${data.config.trabajo.nombre}`);
         lines.push(`Presupuesto: ${data.config.presupuesto ?? "no definido"}`);
         lines.push(`Días de visita: ${data.config.dias.map((d) => `${d.fecha} ${d.desde}-${d.hasta}`).join("; ")}`);
-        lines.push("\nPROPIEDADES:");
+        lines.push("\nPROPIEDADES (ficha completa; usa estos campos para comparar):");
         for (const p of data.properties) {
-          const pre = scoreEval(p, "pre", data.config.ponderaciones);
-          const post = scoreEval(p, "post", data.config.ponderaciones);
-          const comentarios = (p.comentarios || []).slice(0, 3).map((c) => `${c.autor}: ${c.texto}`).join(" | ") || "ninguno";
-          lines.push(`- [${p.id}] ${p.alias} | colonia=${p.colonia} | estado=${p.estado} | registradoPor=${p.registradoPor || "?"} | vistoAtziri=${haVisto(p, "Atziri") ? "si" : "no"} | vistoBrandon=${haVisto(p, "Brandon") ? "si" : "no"} | renta=${p.costos?.renta} | totalMes=${totalMensual(p)} | amueblado=${p.amueblado} | perros=${p.perros?.acepta} | descarte=${p.descarte ? p.descarte.motivo : "no"} | alTec=${p.trasladoTrabajo?.min ?? "Sin dato"}min(${p.trasladoTrabajo?.fuente || ""}) | pre=${pre.score?.toFixed(2) ?? "Sin evaluar"}(${pre.pct}%) | post=${post.score?.toFixed(2) ?? "Sin evaluar"}(${post.pct}%) | jardin=${p.espacios?.jardin} | favorita=${p.favorita} | asesor=${advisorName(p.advisorId)} | comentarios=[${comentarios}]`);
+          lines.push("- " + formatPropFichaAi(p));
         }
         lines.push("\nASESORES:");
         for (const a of data.advisors) {
@@ -3830,7 +3883,7 @@ Reglas: Confirmada/Reprogramada son fijas; Solicitada es semifija (no muevas su 
         }
         lines.push("\nCITAS:");
         for (const a of data.appointments) {
-          lines.push(`- [${a.id}] ${a.fecha} ${a.hora} ${a.duracion}min | ${propName(a.propertyId)} | estado=${a.estado} | notas=${a.notas || ""}`);
+          lines.push(`- [${a.id}] ${a.fecha} ${a.hora} ${a.duracion}min | ${propName(a.propertyId)} | estado=${a.estado} | asesor=${advisorName(a.advisorId || "")} | notas=${a.notas || ""}`);
         }
         return lines.join("\n");
       }
@@ -3893,7 +3946,12 @@ ${old.map((m) => `${m.role}: ${m.content}`).join("\n")}`;
         try {
           const chat = activeAiChat();
           const system = `Eres el asistente de HomeFinder, una app personal para buscar casa en renta en Monterrey.
-Debes basarte SOLO en el contexto de registros proporcionado.
+Debes basarte SOLO en el contexto de registros (fichas) proporcionado.
+Cada propiedad incluye costos, espacios, mascotas, requisitos, traslado al Tec, servicios cercanos, evaluación, asesor, citas y comentarios.
+Para preguntas de comparación (p. ej. "cuál tiene más servicios cerca"):
+- Usa serviciosCount y las categorías listadas en serviciosCercanos.
+- Si dice serviciosCercanos=sin_dato, indícalo; no inventes comercios ni distancias.
+- También puedes usar alTec, totalMes, perros, espacios y scores cuando aporten.
 Distingue claramente: **Registrado**, **Por confirmar** y **Sugerencia**.
 No inventes datos faltantes.
 Si propones cambios (citas, estados), añade al final un bloque JSON así:
