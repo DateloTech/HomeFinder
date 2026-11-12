@@ -491,15 +491,24 @@
     </nav>
 
     <!-- AI FAB -->
-    <button class="ai-fab" @click="aiOpen=true" title="Asistente IA"><i class="ph ph-robot"></i></button>
+    <button class="ai-fab" @click="openAiPanel" title="Asistente IA"><i class="ph ph-robot"></i></button>
 
     <!-- AI Panel -->
-    <div class="overlay" v-if="aiOpen" @click.self="aiOpen=false" style="justify-content:flex-end;align-items:stretch;background:rgba(0,0,0,.25)">
+    <div class="overlay ai-overlay" v-if="aiOpen" @click.self="aiOpen=false" style="justify-content:flex-end;align-items:stretch;background:rgba(0,0,0,.25)">
       <aside class="ai-panel" @click.stop>
         <div class="modal-head">
           <h2>Asistente</h2>
           <button class="icon-btn" @click="aiOpen=false"><i class="ph ph-x"></i></button>
         </div>
+        <div class="ai-chat-toolbar">
+          <select class="grow" :value="data.aiChats?.activeId || ''" @change="selectAiChat($event.target.value)" :disabled="aiBusy">
+            <option v-for="c in (data.aiChats?.chats || [])" :key="c.id" :value="c.id">{{ formatAiChatLabel(c) }}</option>
+          </select>
+          <button class="btn btn-sm" type="button" title="Nueva conversación" :disabled="aiBusy" @click="newAiChat"><i class="ph ph-plus"></i></button>
+          <button class="btn btn-sm btn-ghost" type="button" title="Borrar conversación" :disabled="aiBusy" @click="deleteAiChat()"><i class="ph ph-trash"></i></button>
+        </div>
+        <p class="ai-summary-hint" v-if="activeAiSummary()">Hilo resumido · el asistente conserva el contexto comprimido</p>
+        <p class="ai-summary-hint" v-if="aiSummarizing">Resumiendo conversación…</p>
         <div class="ai-messages" ref="aiMsgs">
           <div v-for="(m,i) in aiMessages" :key="i" class="msg" :class="m.role">{{ m.content }}</div>
           <div v-if="pendingActions.length" class="action-card">

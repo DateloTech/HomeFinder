@@ -139,6 +139,44 @@
       cloudinaryPreset: "",
     };
   }
+  const AI_CHAT_MAX = 10;
+  const AI_MSG_LIVE_MAX = 50;
+  const AI_MSG_KEEP = 12;
+  const AI_MSG_MAX_CHARS = 4000;
+  const AI_WELCOME = { role: "system", content: "Pregúntame sobre tus propiedades, citas o asesores." };
+
+  function emptyAiChats() {
+    return { activeId: "", chats: [] };
+  }
+  function clipAiText(content, max = AI_MSG_MAX_CHARS) {
+    const s = String(content ?? "");
+    return s.length > max ? s.slice(0, max) : s;
+  }
+  function normalizeAiMessage(m) {
+    if (!m || (m.role !== "user" && m.role !== "assistant")) return null;
+    return { role: m.role, content: clipAiText(m.content) };
+  }
+  function normalizeAiChat(c) {
+    if (!c || typeof c !== "object") return null;
+    return {
+      id: c.id || uid(),
+      title: clipAiText(c.title || "Nueva conversación", 60) || "Nueva conversación",
+      updatedAt: c.updatedAt || new Date().toISOString(),
+      summary: clipAiText(c.summary || "", 8000),
+      messages: Array.isArray(c.messages) ? c.messages.map(normalizeAiMessage).filter(Boolean) : [],
+    };
+  }
+  function normalizeAiChats(raw) {
+    const base = emptyAiChats();
+    if (!raw || typeof raw !== "object") return base;
+    let chats = (Array.isArray(raw.chats) ? raw.chats : []).map(normalizeAiChat).filter(Boolean);
+    chats.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    if (chats.length > AI_CHAT_MAX) chats = chats.slice(0, AI_CHAT_MAX);
+    let activeId = raw.activeId || "";
+    if (activeId && !chats.some((c) => c.id === activeId)) activeId = chats[0]?.id || "";
+    return { activeId, chats };
+  }
+
   function emptyData() {
     return {
       rev: 1,
@@ -146,6 +184,7 @@
       properties: [],
       advisors: [],
       appointments: [],
+      aiChats: emptyAiChats(),
       config: defaultConfig(),
     };
   }
@@ -220,6 +259,7 @@
       properties,
       advisors,
       appointments: Array.isArray(d.appointments) ? d.appointments : [],
+      aiChats: normalizeAiChats(d.aiChats),
     };
   }
   function loadSyncMeta() {
@@ -410,10 +450,11 @@
       /* AI */
       const aiOpen = ref(false);
       const aiInput = ref("");
-      const aiMessages = ref([{ role: "system", content: "Pregúntame sobre tus propiedades, citas o asesores." }]);
+      const aiMessages = ref([{ ...AI_WELCOME }]);
       const aiBusy = ref(false);
       const pendingActions = ref([]);
       const aiMsgs = ref(null);
+      const aiSummarizing = ref(false);
 
       function toast(text, type = "") {
         const id = uid();
@@ -654,6 +695,7 @@
           data.properties.splice(0, data.properties.length, ...(migrated.properties || []));
           data.advisors.splice(0, data.advisors.length, ...(migrated.advisors || []));
           data.appointments.splice(0, data.appointments.length, ...(migrated.appointments || []));
+          data.aiChats = normalizeAiChats(migrated.aiChats);
           Object.assign(data.config, migrated.config);
           Object.assign(data.config.ponderaciones, migrated.config.ponderaciones || {});
           Object.assign(data.config.trabajo, migrated.config.trabajo || {});
@@ -662,6 +704,7 @@
         });
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         if (data.config.mapsKey) ensureMaps();
+        hydrateAiFromData();
       }
 
       async function pullFromGist(opts = {}) {
@@ -2198,6 +2241,125 @@
       }
 
       /* ---------- AI ---------- */
+      function ensureAiChats() {
+        if (!data.aiChats || typeof data.aiChats !== "object") {
+          data.aiChats = emptyAiChats();
+        }
+        if (!Array.isArray(data.aiChats.chats)) data.aiChats.chats = [];
+        if (!data.aiChats.chats.length) {
+          const chat = {
+            id: uid(),
+            title: "Nueva conversación",
+            updatedAt: new Date().toISOString(),
+            summary: "",
+            messages: [],
+          };
+          data.aiChats.chats.push(chat);
+          data.aiChats.activeId = chat.id;
+        } else if (!data.aiChats.activeId || !data.aiChats.chats.some((c) => c.id === data.aiChats.activeId)) {
+          data.aiChats.activeId = data.aiChats.chats[0].id;
+        }
+        return data.aiChats;
+      }
+      function activeAiChat() {
+        const chats = data.aiChats?.chats;
+        if (!Array.isArray(chats) || !chats.length) return null;
+        const id = data.aiChats.activeId;
+        return chats.find((c) => c.id === id) || chats[0] || null;
+      }
+      function uiMessagesFromChat(chat) {
+        const msgs = [{ ...AI_WELCOME }];
+        for (const m of chat?.messages || []) msgs.push({ role: m.role, content: m.content });
+        return msgs;
+      }
+      function hydrateAiFromData() {
+        const chat = activeAiChat();
+        aiMessages.value = uiMessagesFromChat(chat);
+        pendingActions.value = [];
+      }
+      function pruneAiChats() {
+        ensureAiChats();
+        data.aiChats.chats.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+        if (data.aiChats.chats.length <= AI_CHAT_MAX) return;
+        const keep = [];
+        const active = data.aiChats.chats.find((c) => c.id === data.aiChats.activeId);
+        if (active) keep.push(active);
+        for (const c of data.aiChats.chats) {
+          if (keep.length >= AI_CHAT_MAX) break;
+          if (!keep.some((k) => k.id === c.id)) keep.push(c);
+        }
+        data.aiChats.chats = keep;
+      }
+      function syncActiveChatFromUi(opts = {}) {
+        const chat = activeAiChat();
+        if (!chat) return null;
+        chat.messages = aiMessages.value
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role, content: clipAiText(m.content) }));
+        const firstUser = chat.messages.find((m) => m.role === "user");
+        if (firstUser) {
+          chat.title = firstUser.content.replace(/\s+/g, " ").trim().slice(0, 40) || "Nueva conversación";
+        }
+        chat.updatedAt = new Date().toISOString();
+        pruneAiChats();
+        if (!opts.skipPersist) persist();
+        return chat;
+      }
+      function newAiChat() {
+        ensureAiChats();
+        const chat = {
+          id: uid(),
+          title: "Nueva conversación",
+          updatedAt: new Date().toISOString(),
+          summary: "",
+          messages: [],
+        };
+        data.aiChats.chats.unshift(chat);
+        data.aiChats.activeId = chat.id;
+        pruneAiChats();
+        hydrateAiFromData();
+        persist();
+      }
+      function selectAiChat(id) {
+        if (!id || id === data.aiChats?.activeId) return;
+        syncActiveChatFromUi({ skipPersist: true });
+        if (!data.aiChats.chats.some((c) => c.id === id)) return;
+        data.aiChats.activeId = id;
+        hydrateAiFromData();
+        persist();
+      }
+      function deleteAiChat(id) {
+        ensureAiChats();
+        const target = id || data.aiChats.activeId;
+        if (!target) return;
+        if (!confirm("¿Borrar esta conversación?")) return;
+        data.aiChats.chats = data.aiChats.chats.filter((c) => c.id !== target);
+        if (data.aiChats.activeId === target) data.aiChats.activeId = data.aiChats.chats[0]?.id || "";
+        if (!data.aiChats.chats.length) {
+          newAiChat();
+          return;
+        }
+        hydrateAiFromData();
+        persist();
+      }
+      function activeAiSummary() {
+        return activeAiChat()?.summary || "";
+      }
+      function openAiPanel() {
+        ensureAiChats();
+        if (!aiMessages.value?.length) hydrateAiFromData();
+        aiOpen.value = true;
+      }
+      function formatAiChatLabel(c) {
+        if (!c) return "";
+        const title = c.title || "Nueva conversación";
+        const d = c.updatedAt ? new Date(c.updatedAt) : null;
+        const when = d && !Number.isNaN(d.getTime())
+          ? d.toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+          : "";
+        return when ? `${title} · ${when}` : title;
+      }
+
       function buildContext() {
         const lines = [];
         lines.push(`Fecha actual del sistema: ${new Date().toISOString()}`);
@@ -2240,15 +2402,46 @@
         return json.choices?.[0]?.message?.content || "";
       }
 
+      async function maybeSummarizeActiveChat() {
+        const chat = activeAiChat();
+        if (!chat || chat.messages.length <= AI_MSG_LIVE_MAX) return;
+        const keep = chat.messages.slice(-AI_MSG_KEEP);
+        const old = chat.messages.slice(0, -AI_MSG_KEEP);
+        const prompt = `Resume de forma compacta (máximo 400 palabras, español) esta conversación sobre búsqueda de casa en renta.
+Incluye preferencias, decisiones, propiedades mencionadas y pendientes.
+No inventes datos.
+
+Resumen previo:
+${chat.summary || "(ninguno)"}
+
+Mensajes a comprimir:
+${old.map((m) => `${m.role}: ${m.content}`).join("\n")}`;
+        aiSummarizing.value = true;
+        try {
+          const summary = await askAI([{ role: "user", content: prompt }]);
+          chat.summary = clipAiText(summary, 8000);
+          chat.messages = keep;
+          chat.updatedAt = new Date().toISOString();
+          hydrateAiFromData();
+          toast("Conversación resumida para seguir el hilo", "ok");
+        } catch (e) {
+          toast("No se pudo resumir el chat; se reintentará después", "err");
+        } finally {
+          aiSummarizing.value = false;
+        }
+      }
+
       async function sendAI() {
         const text = aiInput.value.trim();
-        if (!text) return;
-        aiMessages.value.push({ role: "user", content: text });
+        if (!text || aiBusy.value) return;
+        ensureAiChats();
+        aiMessages.value.push({ role: "user", content: clipAiText(text) });
         aiInput.value = "";
         aiBusy.value = true;
         await nextTick();
         if (aiMsgs.value) aiMsgs.value.scrollTop = aiMsgs.value.scrollHeight;
         try {
+          const chat = activeAiChat();
           const system = `Eres el asistente de HomeFinder, una app personal para buscar casa en renta en Monterrey.
 Debes basarte SOLO en el contexto de registros proporcionado.
 Distingue claramente: **Registrado**, **Por confirmar** y **Sugerencia**.
@@ -2258,16 +2451,31 @@ Si propones cambios (citas, estados), añade al final un bloque JSON así:
 [{"type":"create_appt|update_appt|set_estado","descripcion":"...","payload":{...}}]
 \`\`\`
 Contexto:\n${buildContext()}`;
-          const history = aiMessages.value.filter((m) => m.role !== "system").slice(-12).map((m) => ({ role: m.role, content: m.content }));
+          const history = [];
+          if (chat?.summary) {
+            history.push({
+              role: "system",
+              content: "Resumen de la conversación hasta ahora:\n" + chat.summary,
+            });
+          }
+          const live = aiMessages.value
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .slice(-AI_MSG_KEEP)
+            .map((m) => ({ role: m.role, content: m.content }));
+          history.push(...live);
           const content = await askAI([{ role: "system", content: system }, ...history]);
-          aiMessages.value.push({ role: "assistant", content });
+          aiMessages.value.push({ role: "assistant", content: clipAiText(content) });
           const match = content.match(/```acciones\s*([\s\S]*?)```/);
           if (match) {
             try { pendingActions.value = JSON.parse(match[1]); }
             catch { pendingActions.value = []; }
           } else pendingActions.value = [];
+          syncActiveChatFromUi({ skipPersist: true });
+          await maybeSummarizeActiveChat();
+          persist();
         } catch (e) {
           aiMessages.value.push({ role: "assistant", content: "Error: " + e.message });
+          syncActiveChatFromUi();
         } finally {
           aiBusy.value = false;
           await nextTick();
@@ -2371,11 +2579,13 @@ Contexto:\n${buildContext()}`;
           saveSyncMeta(syncMeta);
         }
         updateSyncLabel();
+        hydrateAiFromData();
         if (data.config.mapsKey) ensureMaps();
         if (syncConfigured()) {
           await pullFromGist({ silent: true });
           if (syncMeta.pending) schedulePush();
         }
+        hydrateAiFromData();
 
         document.addEventListener("visibilitychange", () => {
           if (document.visibilityState === "visible" && syncConfigured()) pullFromGist({ silent: true });
@@ -2416,7 +2626,8 @@ Contexto:\n${buildContext()}`;
         propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
         rankSort, rankOnlyEligible, compareIds, showCompare, secs,
         mapsReady, mapsBusy, propMapEl, propTabsEl, dayMapEl, overviewMapEl, showOverviewMap,
-        aiOpen, aiInput, aiMessages, aiBusy, pendingActions, aiMsgs,
+        aiOpen, aiInput, aiMessages, aiBusy, aiSummarizing, pendingActions, aiMsgs,
+        activeAiSummary, formatAiChatLabel,
         // computed
         filteredProperties, eligibleProperties, discardedProperties, stats,
         upcomingAppts, pendingConfirm, advisorFollowups, rankedProperties, top5,
@@ -2443,7 +2654,7 @@ Contexto:\n${buildContext()}`;
         runPlanner, applyPlanner, toggleCompare,
         toggleSec, addVisitDay, exportBackup, importBackup, restoreBackup,
         retrySync, forcePull, forcePush, resolveConflict, onMapsKeyChange,
-        sendAI, applyAIActions, openPasteAd, extractAd, saveExtracted,
+        sendAI, openAiPanel, newAiChat, selectAiChat, deleteAiChat, applyAIActions, openPasteAd, extractAd, saveExtracted,
       };
     },
   }).mount("#app");
