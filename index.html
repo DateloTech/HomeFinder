@@ -181,6 +181,10 @@
           </button>
         </div>
 
+        <div v-if="dayConflicts.length" class="alert danger mb-12">
+          Conflictos: {{ dayConflicts.join('; ') }}
+        </div>
+
         <template v-if="agendaMode==='day'">
           <div class="row mb-12">
             <span class="small muted grow">{{ dayWindowLabel(agendaDay) }}</span>
@@ -188,7 +192,6 @@
               <i class="ph ph-path"></i> Calcular traslados del día
             </button>
           </div>
-          <div v-if="dayConflicts.length" class="alert danger mb-12">Conflictos de horario: {{ dayConflicts.map(c=>c).join('; ') }}</div>
           <div class="map-box mb-12" ref="dayMapEl"></div>
           <div class="timeline" v-if="dayAppts.length">
             <div v-for="a in dayAppts" :key="a.id" class="appt" :class="apptClass(a)">
@@ -197,8 +200,12 @@
                 <div class="appt-dur">{{ a.duracion || 45 }} min</div>
               </div>
               <div>
-                <div class="row"><strong>{{ propName(a.propertyId) }}</strong> <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span></div>
-                <div class="small muted">{{ propOf(a.propertyId)?.colonia }} · {{ advisorName(a.advisorId || propOf(a.propertyId)?.advisorId) }}</div>
+                <div class="row">
+                  <strong>{{ propName(a.propertyId) }}</strong>
+                  <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
+                  <span v-if="apptHasConflict(a)" class="badge badge-danger">Conflicto</span>
+                </div>
+                <div class="small muted">{{ propOf(a.propertyId)?.colonia }}<span v-if="apptAdvisorLine(a, propOf(a.propertyId))"> · {{ apptAdvisorLine(a, propOf(a.propertyId)) }}</span></div>
                 <div class="row mt-8">
                   <button class="btn btn-sm" type="button" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i></button>
                   <button class="btn btn-sm" type="button" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i></button>
@@ -220,7 +227,11 @@
           <div v-if="!dayAppts.length" class="empty"><i class="ph ph-map-trifold"></i><p>Sin itinerario para este día.</p></div>
           <div v-for="(a, idx) in dayAppts" :key="a.id">
             <div class="itinerary-item">
-              <div class="row mb-8"><strong>{{ a.hora }}</strong> <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span></div>
+              <div class="row mb-8">
+                <strong>{{ a.hora }}</strong>
+                <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
+                <span v-if="apptHasConflict(a)" class="badge badge-danger">Conflicto</span>
+              </div>
               <h3>{{ propName(a.propertyId) }}</h3>
               <p class="small muted">{{ propOf(a.propertyId)?.direccion || '' }} · {{ propOf(a.propertyId)?.colonia }}</p>
               <p class="small mt-8">Asesor: {{ advisorName(a.advisorId || propOf(a.propertyId)?.advisorId) }}</p>
@@ -230,7 +241,7 @@
                 <button class="btn btn-sm btn-primary" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i> Navegar</button>
               </div>
             </div>
-            <div v-if="idx < dayAppts.length-1" class="travel-note" :class="{missing: !travelBetween(a, dayAppts[idx+1])}">
+            <div v-if="idx < dayAppts.length-1" class="travel-note" :class="{missing: !travelBetween(a, dayAppts[idx+1]) || travelBetween(a, dayAppts[idx+1]).fuente==='estimado'}">
               <template v-if="travelBetween(a, dayAppts[idx+1])">
                 Traslado a siguiente: {{ travelBetween(a, dayAppts[idx+1]).min }} min
                 <span class="faint">({{ travelBetween(a, dayAppts[idx+1]).fuente }})</span>
@@ -242,17 +253,22 @@
 
         <template v-if="agendaMode==='planner'">
           <div class="card mb-12">
-            <p class="small muted mb-12">El planificador respeta citas confirmadas (fijas) y solicitadas (semifijas). Solo propone horarios para citas libres o nuevas.</p>
+            <p class="small muted mb-12">Calcula traslados con Maps y, si hay OpenAI, pide una propuesta. Sin IA usa el planificador local. Regenerar sobrescribe el plan del día.</p>
             <div class="row">
-              <button class="btn btn-primary" @click="runPlanner" :disabled="plannerBusy">Generar propuesta</button>
+              <button class="btn btn-primary" @click="runPlanner" :disabled="plannerBusy">{{ plannerBusy ? 'Generando…' : 'Generar propuesta' }}</button>
               <button class="btn" @click="calcDayTravel(agendaDay)" :disabled="!mapsReady || mapsBusy">Calcular traslados</button>
             </div>
           </div>
           <div v-if="plannerResult">
-            <div v-if="plannerResult.warnings.length" class="alert mb-12">
+            <div class="row mb-12">
+              <span class="badge" :class="plannerResult.source==='ai' ? 'badge-accent' : 'badge-info'">{{ plannerResult.source==='ai' ? 'IA' : 'Local' }}</span>
+              <span class="tiny muted" v-if="plannerResult.generatedAt">{{ formatCommentDate(plannerResult.generatedAt) || plannerResult.generatedAt }}</span>
+            </div>
+            <p v-if="plannerResult.summary" class="mb-12">{{ plannerResult.summary }}</p>
+            <div v-if="plannerResult.warnings?.length" class="alert mb-12">
               <div v-for="(w,i) in plannerResult.warnings" :key="i">{{ w }}</div>
             </div>
-            <div v-if="plannerResult.suggestions.length" class="alert info mb-12">
+            <div v-if="plannerResult.suggestions?.length" class="alert info mb-12">
               <div v-for="(s,i) in plannerResult.suggestions" :key="i" class="mb-8">
                 {{ s.text }}
                 <button class="btn btn-sm mt-8" v-if="s.whatsapp" @click="openWhatsApp(s.whatsapp, s.message)">Pedir cambio por WhatsApp</button>
@@ -268,11 +284,14 @@
                 </div>
               </div>
             </div>
-            <div class="row" v-if="plannerResult.changes.length">
+            <div class="row" v-if="plannerResult.changes?.length">
               <button class="btn btn-primary" @click="applyPlanner">Aplicar propuesta</button>
-              <button class="btn btn-ghost" @click="plannerResult=null">Descartar</button>
+              <button class="btn btn-ghost" @click="discardDayPlan">Descartar</button>
             </div>
-            <p v-else class="muted small">Sin cambios que aplicar.</p>
+            <div class="row" v-else>
+              <button class="btn btn-ghost" @click="discardDayPlan">Descartar</button>
+              <p class="muted small">Sin cambios que aplicar.</p>
+            </div>
           </div>
         </template>
       </section>
@@ -284,22 +303,65 @@
           <button class="btn" :disabled="compareIds.length<2" @click="showCompare=true">Comparar ({{ compareIds.length }})</button>
         </div>
         <div class="filter-bar">
-          <select class="select" v-model="rankSort" style="width:auto">
-            <option value="auto">Orden: automático (pre/post)</option>
-            <option value="pre">Solo preliminar</option>
-            <option value="post">Solo presencial</option>
-            <option value="precio">Precio mensual</option>
-            <option value="trabajo">Tiempo al trabajo</option>
-            <option value="colonia">Colonia</option>
-          </select>
           <label class="row small"><input type="checkbox" v-model="rankOnlyEligible" /> Solo elegibles</label>
+          <button class="btn btn-sm" type="button" :disabled="!rankAnyFilterActive" @click="clearAllRankFilters">Limpiar filtros</button>
+          <span class="tiny muted grow">Clic en el título para ordenar · embudo para filtrar</span>
         </div>
         <div class="table-wrap card" style="padding:0">
           <table class="rank">
             <thead>
               <tr>
-                <th></th><th>#</th><th>Propiedad</th><th>Colonia</th><th>Total/mes</th>
-                <th>Prelim.</th><th>Presenc.</th><th>Al Tec</th><th>Compat.</th><th>Estado</th>
+                <th></th>
+                <th>#</th>
+                <th>
+                  <div class="rank-th">
+                    <button type="button" class="rank-th-sort" @click="toggleRankSort('alias')">Propiedad{{ rankSortMark('alias') }}</button>
+                    <button type="button" class="rank-th-filter" :class="{active: rankFilterActive('alias')}" title="Filtrar" @click="openRankFilter('alias', $event)"><i class="ph ph-funnel"></i></button>
+                    <button type="button" class="rank-th-clear" v-if="rankFilterActive('alias')" title="Limpiar columna" @click="clearRankFilterCol('alias', $event)"><i class="ph ph-x"></i></button>
+                  </div>
+                </th>
+                <th>
+                  <div class="rank-th">
+                    <button type="button" class="rank-th-sort" @click="toggleRankSort('colonia')">Colonia{{ rankSortMark('colonia') }}</button>
+                    <button type="button" class="rank-th-filter" :class="{active: rankFilterActive('colonia')}" title="Filtrar" @click="openRankFilter('colonia', $event)"><i class="ph ph-funnel"></i></button>
+                    <button type="button" class="rank-th-clear" v-if="rankFilterActive('colonia')" title="Limpiar columna" @click="clearRankFilterCol('colonia', $event)"><i class="ph ph-x"></i></button>
+                  </div>
+                </th>
+                <th>
+                  <div class="rank-th">
+                    <button type="button" class="rank-th-sort" @click="toggleRankSort('total')">Total/mes{{ rankSortMark('total') }}</button>
+                    <button type="button" class="rank-th-filter" :class="{active: rankFilterActive('total')}" title="Filtrar" @click="openRankFilter('total', $event)"><i class="ph ph-funnel"></i></button>
+                    <button type="button" class="rank-th-clear" v-if="rankFilterActive('total')" title="Limpiar columna" @click="clearRankFilterCol('total', $event)"><i class="ph ph-x"></i></button>
+                  </div>
+                </th>
+                <th>
+                  <div class="rank-th">
+                    <button type="button" class="rank-th-sort" @click="toggleRankSort('pre')">Prelim.{{ rankSortMark('pre') }}</button>
+                    <button type="button" class="rank-th-filter" :class="{active: rankFilterActive('pre')}" title="Filtrar" @click="openRankFilter('pre', $event)"><i class="ph ph-funnel"></i></button>
+                    <button type="button" class="rank-th-clear" v-if="rankFilterActive('pre')" title="Limpiar columna" @click="clearRankFilterCol('pre', $event)"><i class="ph ph-x"></i></button>
+                  </div>
+                </th>
+                <th>
+                  <div class="rank-th">
+                    <button type="button" class="rank-th-sort" @click="toggleRankSort('post')">Presenc.{{ rankSortMark('post') }}</button>
+                    <button type="button" class="rank-th-filter" :class="{active: rankFilterActive('post')}" title="Filtrar" @click="openRankFilter('post', $event)"><i class="ph ph-funnel"></i></button>
+                    <button type="button" class="rank-th-clear" v-if="rankFilterActive('post')" title="Limpiar columna" @click="clearRankFilterCol('post', $event)"><i class="ph ph-x"></i></button>
+                  </div>
+                </th>
+                <th>
+                  <div class="rank-th">
+                    <button type="button" class="rank-th-sort" @click="toggleRankSort('tec')">Al Tec{{ rankSortMark('tec') }}</button>
+                    <button type="button" class="rank-th-filter" :class="{active: rankFilterActive('tec')}" title="Filtrar" @click="openRankFilter('tec', $event)"><i class="ph ph-funnel"></i></button>
+                    <button type="button" class="rank-th-clear" v-if="rankFilterActive('tec')" title="Limpiar columna" @click="clearRankFilterCol('tec', $event)"><i class="ph ph-x"></i></button>
+                  </div>
+                </th>
+                <th>
+                  <div class="rank-th">
+                    <button type="button" class="rank-th-sort" @click="toggleRankSort('estado')">Estado{{ rankSortMark('estado') }}</button>
+                    <button type="button" class="rank-th-filter" :class="{active: rankFilterActive('estado')}" title="Filtrar" @click="openRankFilter('estado', $event)"><i class="ph ph-funnel"></i></button>
+                    <button type="button" class="rank-th-clear" v-if="rankFilterActive('estado')" title="Limpiar columna" @click="clearRankFilterCol('estado', $event)"><i class="ph ph-x"></i></button>
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -315,10 +377,6 @@
                 <td>{{ fmtScore(p._pre) }} <span class="faint">({{ p._prePct }}%)</span></td>
                 <td>{{ fmtScore(p._post) }} <span class="faint">({{ p._postPct }}%)</span></td>
                 <td>{{ p.trasladoTrabajo?.min != null ? p.trasladoTrabajo.min+' min' : 'Sin dato' }}</td>
-                <td>
-                  <span class="badge" :class="p.perros?.acepta==='si'?'badge-ok':p.perros?.acepta==='no'?'badge-danger':'badge-warn'">🐕</span>
-                  <span class="badge" :class="p.amueblado==='sin'?'badge-ok':'badge-warn'">{{ amuebladoLabel(p.amueblado) }}</span>
-                </td>
                 <td><span class="badge" :class="estadoBadge(p.estado)">{{ p.estado }}</span></td>
               </tr>
             </tbody>
@@ -537,12 +595,20 @@
     </div>
 
     <!-- Quick add -->
-    <div class="overlay center" v-if="modals.quickAdd" @click.self="modals.quickAdd=false">
-      <div class="modal" style="max-width:480px">
-        <div class="modal-head"><h2>Registro rápido</h2><button class="icon-btn" @click="modals.quickAdd=false"><i class="ph ph-x"></i></button></div>
+    <div class="overlay center" :class="{ 'overlay-stack': propertyAssignTarget==='appt' }" v-if="modals.quickAdd" @click.self="closeQuickAdd">
+      <div class="modal" style="max-width:560px">
+        <div class="modal-head"><h2>Registro rápido</h2><button class="icon-btn" @click="closeQuickAdd"><i class="ph ph-x"></i></button></div>
         <div class="modal-body" @keydown.enter.exact.prevent="saveQuickAdd">
           <div class="field mb-8"><label>Alias / nombre</label><input v-model="quickForm.alias" placeholder="Casa Cumbres 3 rec" autofocus /></div>
-          <div class="field mb-8"><label>Colonia</label><input v-model="quickForm.colonia" /></div>
+          <div class="grid-2 mb-8">
+            <div class="field"><label>Colonia</label><input v-model="quickForm.colonia" placeholder="Lindavista" /></div>
+            <div class="field"><label>Municipio</label><input v-model="quickForm.municipio" placeholder="Guadalupe / Monterrey…" /></div>
+            <div class="field" style="grid-column:1/-1"><label>Calle</label><input v-model="quickForm.calle" placeholder="Av. Ruiz Cortines" /></div>
+            <div class="field"><label>Número ext.</label><input v-model="quickForm.numeroExt" placeholder="123" /></div>
+            <div class="field"><label>Número int.</label><input v-model="quickForm.numeroInt" placeholder="opcional" /></div>
+            <div class="field"><label>C.P.</label><input v-model="quickForm.cp" placeholder="67190" inputmode="numeric" /></div>
+            <div class="field"><label>Estado</label><input v-model="quickForm.estadoMx" placeholder="Nuevo León" /></div>
+          </div>
           <div class="field mb-8"><label>Renta mensual</label><input type="number" v-model.number="quickForm.renta" /></div>
           <div class="field mb-8"><label>Enlace del anuncio</label><input v-model="quickForm.enlace" placeholder="https://…" /></div>
           <div class="field"><label>Registrado por</label>
@@ -552,7 +618,7 @@
           </div>
         </div>
         <div class="modal-foot">
-          <button class="btn btn-ghost" @click="modals.quickAdd=false">Cancelar</button>
+          <button class="btn btn-ghost" @click="closeQuickAdd">Cancelar</button>
           <button class="btn btn-primary" @click="saveQuickAdd">Guardar</button>
         </div>
       </div>
@@ -583,7 +649,12 @@
                   <option value="full">Amueblada</option>
                 </select>
               </div>
-              <div class="field" style="grid-column:1/-1"><label>Dirección</label><input v-model="extractForm.direccion" /></div>
+              <div class="field" style="grid-column:1/-1"><label>Calle</label><input v-model="extractForm.calle" placeholder="Av. Ruiz Cortines" /></div>
+              <div class="field"><label>Número ext.</label><input v-model="extractForm.numeroExt" placeholder="123" /></div>
+              <div class="field"><label>Número int.</label><input v-model="extractForm.numeroInt" placeholder="opcional" /></div>
+              <div class="field"><label>Municipio</label><input v-model="extractForm.municipio" placeholder="Guadalupe / Monterrey…" /></div>
+              <div class="field"><label>C.P.</label><input v-model="extractForm.cp" placeholder="67190" inputmode="numeric" /></div>
+              <div class="field" style="grid-column:1/-1"><label>Estado</label><input v-model="extractForm.estadoMx" placeholder="Nuevo León" /></div>
               <div class="field" style="grid-column:1/-1"><label>Enlace</label><input v-model="extractForm.enlace" /></div>
               <div class="field"><label>Acepta perros</label>
                 <select v-model="extractForm.perros">
@@ -604,6 +675,38 @@
         <div class="modal-foot">
           <button class="btn btn-ghost" @click="modals.pasteAd=false">Cancelar</button>
           <button class="btn btn-primary" :disabled="!extractForm" @click="saveExtracted">Confirmar y guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rank column filter -->
+    <div class="overlay center" v-if="rankFilterModal.open" @click.self="closeRankFilter">
+      <div class="modal" style="max-width:380px">
+        <div class="modal-head">
+          <h2>{{ rankFilterModalTitle }}</h2>
+          <button class="icon-btn" type="button" @click="closeRankFilter"><i class="ph ph-x"></i></button>
+        </div>
+        <div class="modal-body">
+          <div v-if="rankFilterModalType==='text'" class="field">
+            <label>Contiene</label>
+            <input v-model="rankFilterDraft.text" placeholder="Texto…" autofocus @keydown.enter.prevent="applyRankFilter" />
+          </div>
+          <div v-else-if="rankFilterModalType==='estado'" class="field">
+            <label>Estado</label>
+            <select v-model="rankFilterDraft.estado">
+              <option value="">Todos</option>
+              <option v-for="s in PROPERTY_STATES" :key="s" :value="s">{{ s }}</option>
+            </select>
+          </div>
+          <div v-else class="grid-2">
+            <div class="field"><label>Mínimo</label><input type="number" step="any" v-model.number="rankFilterDraft.min" placeholder="Sin mín." /></div>
+            <div class="field"><label>Máximo</label><input type="number" step="any" v-model.number="rankFilterDraft.max" placeholder="Sin máx." /></div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" type="button" @click="clearRankFilterCol()">Quitar filtro</button>
+          <button class="btn btn-ghost" type="button" @click="closeRankFilter">Cancelar</button>
+          <button class="btn btn-primary" type="button" @click="applyRankFilter">Aplicar</button>
         </div>
       </div>
     </div>
@@ -659,10 +762,13 @@
         <div class="modal-head"><h2>{{ apptForm.id ? 'Editar cita' : 'Nueva cita' }}</h2><button class="icon-btn" @click="modals.appt=false"><i class="ph ph-x"></i></button></div>
         <div class="modal-body">
           <div class="field mb-8"><label>Propiedad</label>
-            <select v-model="apptForm.propertyId" @change="onApptPropertyChange">
-              <option value="">Seleccionar…</option>
-              <option v-for="p in eligibleProperties" :key="p.id" :value="p.id">{{ p.alias }}</option>
-            </select>
+            <div class="row">
+              <select class="grow" v-model="apptForm.propertyId" @change="onApptPropertyChange">
+                <option value="">Seleccionar…</option>
+                <option v-for="p in eligibleProperties" :key="p.id" :value="p.id">{{ p.alias }}</option>
+              </select>
+              <button class="btn btn-sm" type="button" @click="quickNewPropertyForAppt" title="Nueva propiedad">+</button>
+            </div>
           </div>
           <div class="field mb-8"><label>Asesor</label>
             <div class="row">
@@ -683,12 +789,33 @@
               </select>
             </div>
           </div>
+          <div v-if="apptFormConflictOthers.length" class="alert danger mt-12 mb-8">
+            <div v-for="d in apptFormConflictOthers" :key="d.id + d.kind" class="mb-4">
+              <div>Ya hay una cita {{ d.estado }} a las {{ d.hora }} ({{ d.alias }}).</div>
+              <div class="tiny mt-4" v-if="conflictTravelLine(d)">{{ conflictTravelLine(d) }}</div>
+            </div>
+            <div>No se pueden guardar dos eventos que se encimen.</div>
+          </div>
+          <div v-if="apptResolveBusy" class="small muted mt-8">Buscando alternativas…</div>
+          <div v-if="apptResolveOptions.length" class="mt-12">
+            <div class="small muted mb-8">Sugerencias para resolver el conflicto:</div>
+            <button
+              v-for="(opt, i) in apptResolveOptions"
+              :key="i"
+              type="button"
+              class="btn btn-sm mb-8 appt-resolve-btn"
+              @click="applyApptResolve(opt)"
+            >
+              <span class="appt-resolve-title">{{ resolveOptLabel(opt) }}</span>
+              <span class="appt-resolve-reason faint" v-if="opt.reason">{{ opt.reason }}</span>
+            </button>
+          </div>
           <div class="field mt-8"><label>Observaciones</label><textarea v-model="apptForm.notas"></textarea></div>
         </div>
         <div class="modal-foot">
           <button class="btn btn-danger" v-if="apptForm.id" @click="deleteAppt(apptForm.id)">Eliminar</button>
           <button class="btn btn-ghost" @click="modals.appt=false">Cancelar</button>
-          <button class="btn btn-primary" @click="saveAppt">Guardar</button>
+          <button class="btn btn-primary" @click="saveAppt" :disabled="apptResolveBusy">Guardar</button>
         </div>
       </div>
     </div>
@@ -1044,7 +1171,7 @@
               <div class="small muted mb-4">Dirección registrada</div>
               <div>{{ formatDireccionMX(editingProp) || editingProp.direccion || 'Sin dirección' }}</div>
               <div class="tiny faint mt-4" v-if="editingProp.coloniaBounds">Colonia resaltada en el mapa</div>
-              <div class="tiny faint mt-4" v-else-if="editingProp.colonia">Ubica con API para resaltar la colonia en el mapa</div>
+              <div class="tiny faint mt-4" v-else-if="editingProp.colonia">La colonia se resalta al guardar el domicilio</div>
             </div>
 
             <!-- Mapa interactivo si hay API key -->
@@ -1070,24 +1197,20 @@
             <div class="loc-actions mb-16">
               <button class="btn" type="button" @click="openInMaps(editingProp)"><i class="ph ph-map-pin"></i> Abrir en Maps</button>
               <button class="btn btn-primary" type="button" @click="navigateTo(editingProp)"><i class="ph ph-navigation-arrow"></i> Cómo llegar</button>
-              <button class="btn" type="button" @click="geocodeProp" :disabled="!mapsReady || mapsBusy" :title="mapsReady ? '' : 'Requiere API key'">
-                Ubicar con API
-              </button>
             </div>
 
             <div class="card-soft mb-12">
               <strong class="mb-8" style="display:block">Coordenadas</strong>
               <p class="tiny muted mb-8">Opcional. En Google Maps: clic derecho en el pin → copiar coordenadas.</p>
               <div class="grid-2">
-                <div class="field"><label>Lat</label><input type="number" step="any" v-model.number="editingProp.lat" @change="saveEditingProp" placeholder="25.68…" /></div>
-                <div class="field"><label>Lng</label><input type="number" step="any" v-model.number="editingProp.lng" @change="saveEditingProp" placeholder="-100.31…" /></div>
+                <div class="field"><label>Lat</label><input type="number" step="any" v-model.number="editingProp.lat" @change="onCoordsChange" placeholder="25.68…" /></div>
+                <div class="field"><label>Lng</label><input type="number" step="any" v-model.number="editingProp.lng" @change="onCoordsChange" placeholder="-100.31…" /></div>
               </div>
             </div>
 
             <div class="card-soft mb-12">
               <div class="row mb-8">
                 <strong class="grow">Traslado al Tec</strong>
-                <button class="btn btn-sm" type="button" @click="calcWorkTravel" :disabled="!mapsReady || mapsBusy || editingProp.lat==null" :title="mapsReady ? '' : 'Requiere API key'">Calcular con API</button>
               </div>
               <p v-if="editingProp.trasladoTrabajo?.min != null" class="mb-8">
                 <strong>{{ editingProp.trasladoTrabajo.min }} min</strong>
@@ -1095,7 +1218,7 @@
                 <span class="badge ml-8">{{ editingProp.trasladoTrabajo.fuente === 'real' ? 'carro' : editingProp.trasladoTrabajo.fuente }}</span>
                 <span class="tiny muted" v-if="formatTrasladoMeasure(editingProp.trasladoTrabajo)"> · {{ formatTrasladoMeasure(editingProp.trasladoTrabajo) }}</span>
               </p>
-              <p v-else class="muted small mb-8">Sin dato todavía. “Calcular con API” usa ruta en carro (tiempo y km) y guarda la hora de la medición.</p>
+              <p v-else class="muted small mb-8">Se calcula solo al ubicar la propiedad (ruta en carro). También puedes capturarlo a mano abajo.</p>
               <div class="grid-2">
                 <div class="field"><label>Minutos</label><input type="number" v-model.number="manualTravel.min" placeholder="25" /></div>
                 <div class="field"><label>Km</label><input type="number" step="0.1" v-model.number="manualTravel.km" placeholder="12.5" /></div>
@@ -1172,11 +1295,12 @@
           <!-- Citas de la propiedad -->
           <template v-if="propTab==='citas'">
             <button class="btn btn-primary mb-12" @click="openApptForm({propertyId: editingProp.id})">Nueva cita</button>
-            <div v-for="a in apptsOf(editingProp.id)" :key="a.id" class="appt mb-8" :class="apptClass(a)">
+            <div v-for="a in apptsOf(editingProp.id)" :key="a.id" class="appt mb-8" :class="apptClass(a)" role="button" @click="openApptForm(a)">
               <div><div class="appt-time">{{ a.hora }}</div><div class="appt-dur">{{ a.fecha }}</div></div>
               <div>
                 <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
-                <div class="small muted mt-8">{{ a.notas }}</div>
+                <div class="small muted mt-4" v-if="apptAdvisorLine(a, editingProp)">{{ apptAdvisorLine(a, editingProp) }}</div>
+                <div class="small muted mt-4" v-if="a.notas">{{ a.notas }}</div>
               </div>
               <div class="appt-kebab" @click.stop>
                 <button class="icon-btn" type="button" title="Opciones" @click="toggleApptMenu(a.id)"><i class="ph ph-dots-three-vertical"></i></button>

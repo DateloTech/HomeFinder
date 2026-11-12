@@ -214,6 +214,7 @@
       advisors: [],
       appointments: [],
       aiChats: emptyAiChats(),
+      dayPlans: {},
       config: defaultConfig(),
     };
   }
@@ -348,6 +349,7 @@
       advisors,
       appointments: Array.isArray(d.appointments) ? d.appointments : [],
       aiChats: normalizeAiChats(d.aiChats),
+      dayPlans: d.dayPlans && typeof d.dayPlans === "object" && !Array.isArray(d.dayPlans) ? d.dayPlans : {},
     };
   }
   function loadSyncMeta() {
@@ -488,7 +490,11 @@
       ];
 
       const modals = reactive({ quickAdd: false, pasteAd: false, discard: false, appt: false, advisor: false, property: false });
-      const quickForm = reactive({ alias: "", colonia: "", renta: null, enlace: "", registradoPor: "Brandon" });
+      const quickForm = reactive({
+        alias: "", calle: "", numeroExt: "", numeroInt: "",
+        colonia: "", municipio: "", estadoMx: "Nuevo León", cp: "",
+        renta: null, enlace: "", registradoPor: "Brandon",
+      });
       const pasteText = ref("");
       const extractForm = ref(null);
       const discardForm = reactive({ propertyId: null, motivo: "decision", nota: "" });
@@ -521,10 +527,126 @@
       const commentForm = reactive({ autor: "Brandon", texto: "" });
       const agendaDay = ref(data.config.dias[0]?.fecha || "2026-11-21");
       const agendaMode = ref("day");
-      const plannerResult = ref(null);
       const plannerBusy = ref(false);
-      const rankSort = ref("auto");
+      const plannerResult = computed(() => data.dayPlans?.[agendaDay.value] || null);
       const rankOnlyEligible = ref(true);
+      const rankColSort = reactive({ key: "score", dir: "desc" });
+      const rankFilters = reactive({
+        alias: "", colonia: "", estado: "",
+        totalMin: null, totalMax: null,
+        preMin: null, preMax: null,
+        postMin: null, postMax: null,
+        tecMin: null, tecMax: null,
+      });
+      const RANK_FILTER_COLS = {
+        alias: { label: "Propiedad", type: "text" },
+        colonia: { label: "Colonia", type: "text" },
+        total: { label: "Total / mes", type: "range", minKey: "totalMin", maxKey: "totalMax" },
+        pre: { label: "Prelim.", type: "range", minKey: "preMin", maxKey: "preMax" },
+        post: { label: "Presenc.", type: "range", minKey: "postMin", maxKey: "postMax" },
+        tec: { label: "Al Tec (min)", type: "range", minKey: "tecMin", maxKey: "tecMax" },
+        estado: { label: "Estado", type: "estado" },
+      };
+      const rankFilterModal = reactive({ open: false, col: "" });
+      const rankFilterDraft = reactive({ text: "", min: null, max: null, estado: "" });
+      function toggleRankSort(key) {
+        if (rankColSort.key === key) {
+          rankColSort.dir = rankColSort.dir === "asc" ? "desc" : "asc";
+        } else {
+          rankColSort.key = key;
+          rankColSort.dir = (key === "pre" || key === "post" || key === "score") ? "desc" : "asc";
+        }
+      }
+      function rankSortMark(key) {
+        if (rankColSort.key !== key) return "";
+        return rankColSort.dir === "asc" ? " ↑" : " ↓";
+      }
+      function inRankRange(val, min, max) {
+        if (val == null || Number.isNaN(Number(val))) {
+          return (min == null || min === "") && (max == null || max === "");
+        }
+        const n = Number(val);
+        if (min != null && min !== "" && !Number.isNaN(Number(min)) && n < Number(min)) return false;
+        if (max != null && max !== "" && !Number.isNaN(Number(max)) && n > Number(max)) return false;
+        return true;
+      }
+      function rankFilterActive(col) {
+        const meta = RANK_FILTER_COLS[col];
+        if (!meta) return false;
+        if (meta.type === "text") return !!String(rankFilters[col] || "").trim();
+        if (meta.type === "estado") return !!rankFilters.estado;
+        if (meta.type === "range") {
+          const min = rankFilters[meta.minKey], max = rankFilters[meta.maxKey];
+          return (min != null && min !== "") || (max != null && max !== "");
+        }
+        return false;
+      }
+      function openRankFilter(col, ev) {
+        ev?.stopPropagation?.();
+        const meta = RANK_FILTER_COLS[col];
+        if (!meta) return;
+        rankFilterModal.col = col;
+        if (meta.type === "text") {
+          Object.assign(rankFilterDraft, { text: rankFilters[col] || "", min: null, max: null, estado: "" });
+        } else if (meta.type === "estado") {
+          Object.assign(rankFilterDraft, { text: "", min: null, max: null, estado: rankFilters.estado || "" });
+        } else {
+          Object.assign(rankFilterDraft, {
+            text: "", estado: "",
+            min: rankFilters[meta.minKey] ?? null,
+            max: rankFilters[meta.maxKey] ?? null,
+          });
+        }
+        rankFilterModal.open = true;
+      }
+      function closeRankFilter() { rankFilterModal.open = false; }
+      function applyRankFilter() {
+        const col = rankFilterModal.col;
+        const meta = RANK_FILTER_COLS[col];
+        if (!meta) { rankFilterModal.open = false; return; }
+        if (meta.type === "text") rankFilters[col] = String(rankFilterDraft.text || "").trim();
+        else if (meta.type === "estado") rankFilters.estado = rankFilterDraft.estado || "";
+        else {
+          rankFilters[meta.minKey] = rankFilterDraft.min === "" ? null : rankFilterDraft.min;
+          rankFilters[meta.maxKey] = rankFilterDraft.max === "" ? null : rankFilterDraft.max;
+        }
+        rankFilterModal.open = false;
+      }
+      function clearRankFilterCol(col, ev) {
+        ev?.stopPropagation?.();
+        const key = col || rankFilterModal.col;
+        const meta = RANK_FILTER_COLS[key];
+        if (!meta) return;
+        if (meta.type === "text") rankFilters[key] = "";
+        else if (meta.type === "estado") rankFilters.estado = "";
+        else {
+          rankFilters[meta.minKey] = null;
+          rankFilters[meta.maxKey] = null;
+        }
+        if (!col || key === rankFilterModal.col) {
+          Object.assign(rankFilterDraft, { text: "", min: null, max: null, estado: "" });
+          rankFilterModal.open = false;
+        }
+      }
+      function clearAllRankFilters() {
+        Object.assign(rankFilters, {
+          alias: "", colonia: "", estado: "",
+          totalMin: null, totalMax: null,
+          preMin: null, preMax: null,
+          postMin: null, postMax: null,
+          tecMin: null, tecMax: null,
+        });
+        Object.assign(rankFilterDraft, { text: "", min: null, max: null, estado: "" });
+        rankFilterModal.open = false;
+      }
+      const rankAnyFilterActive = computed(() =>
+        Object.keys(RANK_FILTER_COLS).some((col) => rankFilterActive(col))
+      );
+      const rankFilterModalTitle = computed(() => {
+        const meta = RANK_FILTER_COLS[rankFilterModal.col];
+        return meta ? ("Filtrar: " + meta.label) : "Filtrar";
+      });
+      const rankFilterModalType = computed(() => RANK_FILTER_COLS[rankFilterModal.col]?.type || "text");
       const compareIds = ref([]);
       const showCompare = ref(false);
       const secs = reactive({ persona: true, dias: true, weights: false, sync: true, maps: false, cloudinary: true, ai: false, backup: false });
@@ -959,24 +1081,46 @@
         const pre = scoreEval(p, "pre", data.config.ponderaciones);
         const post = scoreEval(p, "post", data.config.ponderaciones);
         const visited = p.estado === "Visitada" || p.estado === "Favorita" || post.score != null;
-        const usePost = rankSort.value === "post" || (rankSort.value === "auto" && visited && post.score != null);
-        const usePre = rankSort.value === "pre" || (rankSort.value === "auto" && !usePost);
+        const usePost = visited && post.score != null;
         return {
           ...p,
           _pre: pre.score, _prePct: pre.pct, _post: post.score, _postPct: post.pct,
           _score: usePost ? post.score : pre.score,
           _scoreKind: usePost ? "Presencial" : (pre.score != null ? "Preliminar" : null),
+          _total: totalMensual(p),
+          _tec: p.trasladoTrabajo?.min ?? null,
         };
       }
 
       const rankedProperties = computed(() => {
         let list = data.properties.map(enrichScore);
         if (rankOnlyEligible.value) list = list.filter((p) => p.estado !== "Descartada");
+        const f = rankFilters;
+        const qAlias = String(f.alias || "").trim().toLowerCase();
+        const qCol = String(f.colonia || "").trim().toLowerCase();
+        list = list.filter((p) => {
+          if (qAlias && !(p.alias || "").toLowerCase().includes(qAlias)) return false;
+          if (qCol && !(p.colonia || "").toLowerCase().includes(qCol)) return false;
+          if (f.estado && p.estado !== f.estado) return false;
+          if (!inRankRange(p._total, f.totalMin, f.totalMax)) return false;
+          if (!inRankRange(p._pre, f.preMin, f.preMax)) return false;
+          if (!inRankRange(p._post, f.postMin, f.postMax)) return false;
+          if (!inRankRange(p._tec, f.tecMin, f.tecMax)) return false;
+          return true;
+        });
+        const dir = rankColSort.dir === "asc" ? 1 : -1;
+        const key = rankColSort.key;
         list.sort((a, b) => {
-          if (rankSort.value === "precio") return totalMensual(a) - totalMensual(b);
-          if (rankSort.value === "trabajo") return (a.trasladoTrabajo?.min ?? 9999) - (b.trasladoTrabajo?.min ?? 9999);
-          if (rankSort.value === "colonia") return (a.colonia || "").localeCompare(b.colonia || "");
-          return (b._score ?? -1) - (a._score ?? -1);
+          let av, bv;
+          if (key === "alias") return dir * (a.alias || "").localeCompare(b.alias || "");
+          if (key === "colonia") return dir * (a.colonia || "").localeCompare(b.colonia || "");
+          if (key === "estado") return dir * (a.estado || "").localeCompare(b.estado || "");
+          if (key === "total") { av = a._total ?? (dir > 0 ? Infinity : -Infinity); bv = b._total ?? (dir > 0 ? Infinity : -Infinity); }
+          else if (key === "pre") { av = a._pre ?? (dir > 0 ? Infinity : -Infinity); bv = b._pre ?? (dir > 0 ? Infinity : -Infinity); }
+          else if (key === "post") { av = a._post ?? (dir > 0 ? Infinity : -Infinity); bv = b._post ?? (dir > 0 ? Infinity : -Infinity); }
+          else if (key === "tec") { av = a._tec ?? (dir > 0 ? Infinity : -Infinity); bv = b._tec ?? (dir > 0 ? Infinity : -Infinity); }
+          else { av = a._score ?? -1; bv = b._score ?? -1; }
+          return dir * (av - bv);
         });
         return list;
       });
@@ -989,47 +1133,209 @@
           .filter((a) => a.fecha === agendaDay.value && a.estado !== "Cancelada")
           .sort((a, b) => a.hora.localeCompare(b.hora));
       });
-      const dayConflicts = computed(() => {
-        const list = dayAppts.value;
+      function collectDayConflicts(list) {
         const msgs = [];
+        const ids = new Set();
+        const details = [];
+        function pushDetail(a, kind, extra = {}) {
+          if (a?.id) ids.add(a.id);
+          details.push({
+            id: a?.id || "",
+            propertyId: a?.propertyId || "",
+            alias: propName(a?.propertyId),
+            estado: a?.estado || "",
+            hora: a?.hora || "",
+            kind,
+            travelMin: extra.travelMin ?? null,
+            travelFuente: extra.travelFuente || "",
+            arrivesAt: extra.arrivesAt || "",
+            endsAt: extra.endsAt || "",
+          });
+        }
         for (let i = 0; i < list.length; i++) {
           for (let j = i + 1; j < list.length; j++) {
             const a = list[i], b = list[j];
             const a0 = timeToMin(a.hora), a1 = a0 + (a.duracion || 45);
             const b0 = timeToMin(b.hora), b1 = b0 + (b.duracion || 45);
-            if (a0 < b1 && b0 < a1) msgs.push(`${propName(a.propertyId)} vs ${propName(b.propertyId)}`);
+            if (a0 < b1 && b0 < a1) {
+              msgs.push(`Traslape: ${propName(a.propertyId)} vs ${propName(b.propertyId)}`);
+              const earlier = a0 <= b0 ? a : b;
+              const later = a0 <= b0 ? b : a;
+              const travel = travelBetween(earlier, later);
+              const extra = travel?.min != null
+                ? {
+                  travelMin: travel.min,
+                  travelFuente: travel.fuente === "estimado" ? "estimado" : "carro",
+                  endsAt: minToTime(timeToMin(earlier.hora) + (earlier.duracion || 45)),
+                  arrivesAt: minToTime(timeToMin(earlier.hora) + (earlier.duracion || 45) + travel.min),
+                }
+                : {};
+              pushDetail(a, "traslape", extra);
+              pushDetail(b, "traslape", extra);
+            }
           }
         }
-        return msgs;
+        for (let i = 0; i < list.length - 1; i++) {
+          const a = list[i], b = list[i + 1];
+          const travel = travelBetween(a, b);
+          if (!travel || travel.min == null) continue;
+          const aEnd = timeToMin(a.hora) + (a.duracion || 45);
+          const bStart = timeToMin(b.hora);
+          if (aEnd + travel.min > bStart) {
+            const fuente = travel.fuente === "estimado" ? "estimado" : "carro";
+            msgs.push(`No alcanzas: ${propName(a.propertyId)} → ${propName(b.propertyId)} (${travel.min} min ${fuente})`);
+            const extra = {
+              travelMin: travel.min,
+              travelFuente: fuente,
+              endsAt: minToTime(aEnd),
+              arrivesAt: minToTime(aEnd + travel.min),
+            };
+            pushDetail(a, "traslado", extra);
+            pushDetail(b, "traslado", extra);
+          }
+        }
+        return { msgs, ids, details };
+      }
+      const dayConflicts = computed(() => collectDayConflicts(dayAppts.value).msgs);
+      const dayConflictIds = computed(() => collectDayConflicts(dayAppts.value).ids);
+      function apptHasConflict(a) {
+        return !!(a?.id && dayConflictIds.value.has(a.id));
+      }
+      function trialApptsFromForm() {
+        if (!apptForm.fecha || !apptForm.hora || !apptForm.propertyId) return [];
+        const draft = {
+          id: apptForm.id || "__draft__",
+          propertyId: apptForm.propertyId,
+          fecha: apptForm.fecha,
+          hora: apptForm.hora,
+          duracion: apptForm.duracion || data.config.duracionDefault || 45,
+          estado: apptForm.estado || "Por solicitar",
+        };
+        return data.appointments
+          .filter((a) => a.fecha === draft.fecha && a.estado !== "Cancelada" && a.id !== apptForm.id)
+          .concat([draft])
+          .sort((a, b) => String(a.hora).localeCompare(String(b.hora)));
+      }
+      const apptFormConflicts = computed(() => {
+        if (!modals.appt) return { msgs: [], details: [], ids: new Set() };
+        const trial = trialApptsFromForm();
+        if (trial.length < 2) return { msgs: [], details: [], ids: new Set() };
+        return collectDayConflicts(trial);
       });
+      const apptFormConflictOthers = computed(() => {
+        const draftId = apptForm.id || "__draft__";
+        const seen = new Set();
+        return (apptFormConflicts.value.details || []).filter((d) => {
+          if (!d.id || d.id === draftId) return false;
+          if (seen.has(d.id)) return false;
+          seen.add(d.id);
+          return true;
+        });
+      });
+      function conflictTravelLine(d) {
+        if (!d || d.travelMin == null) return "";
+        const fuente = d.travelFuente || "carro";
+        if (d.endsAt && d.arrivesAt) {
+          return `Banda de traslado: ${d.travelMin} min ${fuente} (fin ${d.endsAt} → llega ~${d.arrivesAt}).`;
+        }
+        return `Banda de traslado: ${d.travelMin} min ${fuente}.`;
+      }
+      const apptResolveOptions = ref([]);
+      const apptResolveBusy = ref(false);
+      let apptResolveTimer = null;
+      let apptResolveFingerprint = "";
+      function clearApptResolve() {
+        apptResolveOptions.value = [];
+        apptResolveFingerprint = "";
+      }
+      function apptResolveKey() {
+        const ids = apptFormConflictOthers.value.map((d) => d.id).sort().join(",");
+        return [apptForm.fecha, apptForm.hora, apptForm.duracion, apptForm.propertyId, ids].join("|");
+      }
+      function resolveOptLabel(opt) {
+        if (!opt) return "";
+        if (opt.id === "move_new") return `Mover esta cita a ${opt.hora}`;
+        const a = data.appointments.find((x) => x.id === opt.targetApptId);
+        return `Mover ${propName(a?.propertyId) || "cita existente"} a ${opt.hora}`;
+      }
 
       /* ---------- Property ops ---------- */
       function propOf(id) { return data.properties.find((p) => p.id === id); }
       function propName(id) { return propOf(id)?.alias || "Propiedad"; }
       function advisorOf(p) { return data.advisors.find((a) => a.id === (typeof p === "string" ? p : p?.advisorId)); }
       function advisorName(id) { return data.advisors.find((a) => a.id === id)?.nombre || "—"; }
-      function propsOfAdvisor(id) { return data.properties.filter((p) => p.advisorId === id); }
+      function apptAdvisorLine(a, prop) {
+        const id = a?.advisorId || prop?.advisorId || "";
+        const ad = data.advisors.find((x) => x.id === id);
+        if (!ad) return "";
+        return [ad.nombre, ad.inmobiliaria].filter(Boolean).join(" · ");
+      }
+      function propsOfAdvisor(id) {
+        if (!id) return [];
+        const sid = String(id);
+        const viaAppt = new Set(
+          data.appointments
+            .filter((a) => a.estado !== "Cancelada" && String(a.advisorId || "") === sid)
+            .map((a) => a.propertyId)
+            .filter(Boolean)
+        );
+        return data.properties.filter(
+          (p) => String(p.advisorId || "") === sid || viaAppt.has(p.id)
+        );
+      }
       function apptsOf(pid) { return data.appointments.filter((a) => a.propertyId === pid).sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora)); }
 
-      function openQuickAdd() {
+      const propertyAssignTarget = ref(null); // "appt" | null
+      function openQuickAdd(assignTarget) {
+        propertyAssignTarget.value = assignTarget || null;
         Object.assign(quickForm, {
-          alias: "", colonia: "", renta: null, enlace: "",
+          alias: "", calle: "", numeroExt: "", numeroInt: "",
+          colonia: "", municipio: "", estadoMx: "Nuevo León", cp: "",
+          renta: null, enlace: "",
           registradoPor: data.config.personaActiva || "Brandon",
         });
         modals.quickAdd = true;
       }
+      function closeQuickAdd() {
+        modals.quickAdd = false;
+        propertyAssignTarget.value = null;
+      }
+      function quickNewPropertyForAppt() {
+        openQuickAdd("appt");
+      }
       function saveQuickAdd() {
-        if (!quickForm.alias && !quickForm.colonia) { toast("Agrega al menos un alias o colonia", "err"); return; }
+        if (!quickForm.alias && !quickForm.colonia && !quickForm.calle) {
+          toast("Agrega al menos un alias, colonia o calle", "err");
+          return;
+        }
         const p = newProperty({
           alias: quickForm.alias || (quickForm.colonia ? "Casa " + quickForm.colonia : "Nueva propiedad"),
-          colonia: quickForm.colonia,
+          calle: quickForm.calle || "",
+          numeroExt: quickForm.numeroExt || "",
+          numeroInt: quickForm.numeroInt || "",
+          colonia: quickForm.colonia || "",
+          municipio: quickForm.municipio || "",
+          estadoMx: quickForm.estadoMx || "Nuevo León",
+          cp: quickForm.cp || "",
           enlace: quickForm.enlace,
           registradoPor: quickForm.registradoPor || data.config.personaActiva || "Brandon",
           costos: { ...newProperty().costos, renta: quickForm.renta },
         });
+        syncDireccionFromMx(p);
         data.properties.unshift(p);
+        const assignToAppt = propertyAssignTarget.value === "appt";
+        propertyAssignTarget.value = null;
         persist();
         modals.quickAdd = false;
+        geocodeProperty(p, { silent: true });
+        if (assignToAppt) {
+          apptForm.propertyId = p.id;
+          if (p.advisorId) apptForm.advisorId = p.advisorId;
+          else onApptPropertyChange();
+          toast("Propiedad creada y asignada a la cita", "ok");
+          if (p.enlace) applyCoverPhoto(p, { notify: true });
+          return;
+        }
         toast("Propiedad registrada", "ok");
         if (p.enlace) applyCoverPhoto(p, { notify: true });
         openProperty(p.id);
@@ -1088,10 +1394,15 @@
         if (composed) return composed;
         return [p.direccion, p.colonia, "Monterrey", "Nuevo León"].filter(Boolean).join(", ");
       }
+      let geocodeDebounceTimer = null;
       function saveMxAddress() {
         if (!editingProp.value) return;
         syncDireccionFromMx(editingProp.value);
         saveEditingProp();
+        clearTimeout(geocodeDebounceTimer);
+        geocodeDebounceTimer = setTimeout(() => {
+          geocodeProperty(editingProp.value, { silent: true });
+        }, 500);
       }
       function duplicateProp(p) {
         const copy = JSON.parse(JSON.stringify(p));
@@ -1658,6 +1969,8 @@
       }
       function openApptForm(a) {
         apptMenuId.value = null;
+        clearApptResolve();
+        apptResolveBusy.value = false;
         const base = newAppt({
           fecha: agendaDay.value,
           duracion: data.config.duracionDefault || 45,
@@ -1673,30 +1986,270 @@
         if (!apptForm.advisorId && apptForm.propertyId) {
           apptForm.advisorId = propOf(apptForm.propertyId)?.advisorId || "";
         }
+        clearApptResolve();
       }
       function quickNewAdvisorForAppt() {
         openAdvisorForm(null, "appt");
       }
-      function saveAppt() {
+      function commitAppt(copy) {
+        const idx = data.appointments.findIndex((a) => a.id === copy.id);
+        if (idx >= 0) data.appointments[idx] = copy;
+        else data.appointments.push(copy);
+        const p = propOf(copy.propertyId);
+        if (p) {
+          if (copy.advisorId && !p.advisorId) {
+            p.advisorId = copy.advisorId;
+            if (editingProp.value?.id === p.id) editingProp.value.advisorId = copy.advisorId;
+          }
+          if (p.estado !== "Descartada") {
+            if (copy.estado === "Confirmada" || copy.estado === "Reprogramada") p.estado = "Cita confirmada";
+            else if (copy.estado === "Solicitada" && !["Cita confirmada", "Visitada", "Favorita"].includes(p.estado)) p.estado = "Cita solicitada";
+            else if (copy.estado === "Realizada" && !["Favorita"].includes(p.estado)) p.estado = "Visitada";
+          }
+        }
+        persist();
+        apptResolveOptions.value = [];
+        modals.appt = false;
+        toast("Cita guardada", "ok");
+        nextTick(() => renderDayMap());
+      }
+      function ceilTo5(min) {
+        return Math.ceil(min / 5) * 5;
+      }
+      function localApptResolveOptions(draft, others) {
+        const day = data.config.dias.find((d) => d.fecha === draft.fecha);
+        const dur = draft.duracion || data.config.duracionDefault || 45;
+        const dayStart = timeToMin(day?.desde || "09:00");
+        const dayEnd = timeToMin(day?.hasta || "20:00");
+        const options = [];
+        const sorted = [...others].sort((a, b) => String(a.hora).localeCompare(String(b.hora)));
+
+        function fits(horaMin, excludeId) {
+          const probe = { ...draft, hora: minToTime(horaMin), id: draft.id || "__draft__" };
+          const trial = data.appointments
+            .filter((a) => a.fecha === draft.fecha && a.estado !== "Cancelada" && a.id !== draft.id && a.id !== excludeId)
+            .concat([probe])
+            .sort((a, b) => String(a.hora).localeCompare(String(b.hora)));
+          return collectDayConflicts(trial).details.length === 0;
+        }
+
+        let cursor = dayStart;
+        if (fits(cursor)) {
+          options.push({
+            id: "move_new",
+            targetApptId: null,
+            fecha: draft.fecha,
+            hora: minToTime(cursor),
+            reason: "Inicio de la ventana del día",
+            travelMinExtra: 0,
+          });
+        }
+        for (const o of sorted) {
+          const oDur = o.duracion || 45;
+          const travel = travelBetween(o, draft) || { min: 5, fuente: "estimado" };
+          cursor = ceilTo5(timeToMin(o.hora) + oDur + travel.min);
+          const fuente = travel.fuente === "estimado" ? "estimado" : "carro";
+          if (cursor + dur <= dayEnd && fits(cursor)) {
+            options.push({
+              id: "move_new",
+              targetApptId: null,
+              fecha: draft.fecha,
+              hora: minToTime(cursor),
+              reason: `Tras ${o.hora} · ${oDur} min + ${travel.min} min ${fuente}`,
+              travelMinExtra: travel.min || 0,
+            });
+          }
+          if (options.length >= 2) break;
+        }
+        for (const o of sorted.slice(0, 2)) {
+          const travel = travelBetween(draft, o) || { min: 5, fuente: "estimado" };
+          let moveAt = ceilTo5(timeToMin(draft.hora) + dur + travel.min);
+          if (moveAt + (o.duracion || 45) > dayEnd) continue;
+          const probeExisting = { ...o, hora: minToTime(moveAt) };
+          const trial = data.appointments
+            .filter((a) => a.fecha === draft.fecha && a.estado !== "Cancelada" && a.id !== o.id && a.id !== draft.id)
+            .concat([draft, probeExisting])
+            .sort((a, b) => String(a.hora).localeCompare(String(b.hora)));
+          if (collectDayConflicts(trial).details.length) continue;
+          const fuente = travel.fuente === "estimado" ? "estimado" : "carro";
+          options.push({
+            id: "move_existing",
+            targetApptId: o.id,
+            fecha: draft.fecha,
+            hora: minToTime(moveAt),
+            reason: `+${travel.min} min ${fuente} · deja esta cita a las ${draft.hora}`,
+            travelMinExtra: travel.min || 0,
+          });
+        }
+        return options.slice(0, 3);
+      }
+      async function suggestApptResolve(opts = {}) {
+        const quiet = !!opts.quiet;
+        if (!apptForm.propertyId || !apptForm.fecha || !apptForm.hora) return;
+        const fpAtStart = apptResolveKey();
+        apptResolveBusy.value = true;
+        if (!quiet) apptResolveOptions.value = [];
+        try {
+          await calcDayTravel(apptForm.fecha, {
+            silent: true,
+            extraPropertyIds: [apptForm.propertyId],
+          });
+          const draft = {
+            id: apptForm.id || "__draft__",
+            propertyId: apptForm.propertyId,
+            fecha: apptForm.fecha,
+            hora: apptForm.hora,
+            duracion: apptForm.duracion || data.config.duracionDefault || 45,
+            estado: apptForm.estado || "Por solicitar",
+          };
+          const others = data.appointments.filter(
+            (a) => a.fecha === draft.fecha && a.estado !== "Cancelada" && a.id !== apptForm.id
+          );
+          const pDraft = propOf(draft.propertyId);
+          let options = null;
+          if (data.config.openaiKey) {
+            try {
+              const travels = [];
+              const props = [pDraft, ...others.map((a) => propOf(a.propertyId))].filter(Boolean);
+              for (let i = 0; i < props.length; i++) {
+                for (let j = 0; j < props.length; j++) {
+                  if (i === j) continue;
+                  const t = getTravel(props[i], props[j]) || (() => {
+                    const km = haversineKm(props[i], props[j]);
+                    return km == null ? null : { min: Math.max(5, Math.round(km * 2.5)), fuente: "estimado" };
+                  })();
+                  if (t?.min != null) {
+                    travels.push({
+                      from: props[i].id,
+                      to: props[j].id,
+                      min: t.min,
+                      fuente: t.fuente === "estimado" ? "estimado" : "carro",
+                    });
+                  }
+                }
+              }
+              const day = data.config.dias.find((d) => d.fecha === draft.fecha);
+              const ctx = {
+                ventana: day ? { desde: day.desde, hasta: day.hasta } : null,
+                reglaHueco: "horaMinimaSiguiente = horaCita + duracion + minutosTrasladoCarro (usar trasladosMin; NO agregar margen extra)",
+                nueva: {
+                  propertyId: draft.propertyId,
+                  alias: pDraft?.alias || "",
+                  colonia: pDraft?.colonia || "",
+                  lat: pDraft?.lat ?? null,
+                  lng: pDraft?.lng ?? null,
+                  horaDeseada: draft.hora,
+                  duracion: draft.duracion,
+                  fecha: draft.fecha,
+                },
+                existentes: others.map((a) => {
+                  const p = propOf(a.propertyId);
+                  return {
+                    id: a.id, propertyId: a.propertyId, estado: a.estado, hora: a.hora,
+                    duracion: a.duracion || 45, alias: p?.alias || "", colonia: p?.colonia || "",
+                    lat: p?.lat ?? null, lng: p?.lng ?? null,
+                  };
+                }),
+                trasladosMin: travels,
+              };
+              const content = await askAI([
+                {
+                  role: "system",
+                  content: `Eres el asistente de agenda de HomeFinder. Hay un conflicto de horario/traslado.
+Responde SOLO JSON válido (sin markdown): {"options":[{"id":"move_new"|"move_existing","targetApptId":null|"id","fecha":"YYYY-MM-DD","hora":"HH:MM","reason":"texto corto","travelMinExtra":0}]}.
+Máximo 3 opciones. move_new = reubicar la cita nueva. move_existing = reubicar una existente (targetApptId) para liberar el horario deseado de la nueva.
+La hora mínima después de una cita es exactamente hora+duracion+traslado en carro de trasladosMin. NO inventes ni agregues margen extra. Preferir fuente carro sobre estimado. Minimiza traslados y respeta la ventana del día. No inventes ids.`,
+                },
+                { role: "user", content: JSON.stringify(ctx) },
+              ]);
+              const parsed = JSON.parse(String(content || "").replace(/```json|```/g, "").trim());
+              if (Array.isArray(parsed?.options) && parsed.options.length) {
+                options = parsed.options
+                  .filter((o) => o && (o.id === "move_new" || o.id === "move_existing") && o.hora)
+                  .map((o) => ({
+                    id: o.id,
+                    targetApptId: o.id === "move_existing" ? (o.targetApptId || null) : null,
+                    fecha: o.fecha || draft.fecha,
+                    hora: o.hora,
+                    reason: o.reason || "",
+                    travelMinExtra: Number(o.travelMinExtra) || 0,
+                  }))
+                  .slice(0, 3);
+              }
+            } catch {
+              options = null;
+            }
+          }
+          if (!options || !options.length) options = localApptResolveOptions(draft, others);
+          if (fpAtStart === apptResolveKey()) {
+            apptResolveOptions.value = options || [];
+            apptResolveFingerprint = fpAtStart;
+            if (!quiet && !apptResolveOptions.value.length) {
+              toast("No hay hueco libre sugerido ese día", "err");
+            }
+          }
+        } finally {
+          apptResolveBusy.value = false;
+        }
+      }
+      function applyApptResolve(opt) {
+        if (!opt) return;
+        if (opt.id === "move_new") {
+          if (opt.fecha) apptForm.fecha = opt.fecha;
+          if (opt.hora) apptForm.hora = opt.hora;
+          clearApptResolve();
+          toast("Horario de esta cita ajustado — revisa y guarda", "ok");
+          return;
+        }
+        if (opt.id === "move_existing" && opt.targetApptId) {
+          const existing = data.appointments.find((a) => a.id === opt.targetApptId);
+          if (!existing) { toast("No se encontró la cita a mover", "err"); return; }
+          existing.hora = opt.hora;
+          if (opt.fecha) existing.fecha = opt.fecha;
+          persist();
+          apptResolveOptions.value = [];
+          const copy = JSON.parse(JSON.stringify(apptForm));
+          const trial = data.appointments
+            .filter((a) => a.fecha === copy.fecha && a.estado !== "Cancelada" && a.id !== copy.id)
+            .concat([copy])
+            .sort((a, b) => String(a.hora).localeCompare(String(b.hora)));
+          if (collectDayConflicts(trial).details.length) {
+            toast("Aún hay conflicto — elige otra opción o cambia la hora", "err");
+            return;
+          }
+          commitAppt(copy);
+          return;
+        }
+      }
+      async function saveAppt() {
         if (!apptForm.propertyId || !apptForm.fecha || !apptForm.hora) {
           toast("Propiedad, fecha y hora son requeridos", "err"); return;
         }
         if (!apptForm.advisorId) apptForm.advisorId = propOf(apptForm.propertyId)?.advisorId || "";
-        const idx = data.appointments.findIndex((a) => a.id === apptForm.id);
         const copy = JSON.parse(JSON.stringify(apptForm));
-        if (idx >= 0) data.appointments[idx] = copy;
-        else data.appointments.push(copy);
-        // Sync property estado lightly
-        const p = propOf(copy.propertyId);
-        if (p && p.estado !== "Descartada") {
-          if (copy.estado === "Confirmada" || copy.estado === "Reprogramada") p.estado = "Cita confirmada";
-          else if (copy.estado === "Solicitada" && !["Cita confirmada", "Visitada", "Favorita"].includes(p.estado)) p.estado = "Cita solicitada";
-          else if (copy.estado === "Realizada" && !["Favorita"].includes(p.estado)) p.estado = "Visitada";
+        await calcDayTravel(copy.fecha, { silent: true });
+        const trial = data.appointments
+          .filter((a) => a.fecha === copy.fecha && a.estado !== "Cancelada" && a.id !== copy.id)
+          .concat([copy])
+          .sort((a, b) => String(a.hora).localeCompare(String(b.hora)));
+        const conflicts = collectDayConflicts(trial);
+        if (conflicts.details.length) {
+          const seen = new Set();
+          const lines = [];
+          for (const d of conflicts.details) {
+            if (!d.id || d.id === copy.id) continue;
+            if (seen.has(d.id)) continue;
+            seen.add(d.id);
+            lines.push(`Ya hay una cita ${d.estado} a las ${d.hora} (${d.alias}).`);
+            const travelLine = conflictTravelLine(d);
+            if (travelLine) lines.push(travelLine);
+          }
+          if (!lines.length) lines.push("Hay traslape o no alcanza el traslado con otra cita.");
+          alert(lines.join("\n") + "\n\nNo se pueden guardar dos eventos que se encimen.");
+          if (!apptResolveOptions.value.length) await suggestApptResolve();
+          return;
         }
-        persist();
-        modals.appt = false;
-        toast("Cita guardada", "ok");
-        nextTick(() => renderDayMap());
+        commitAppt(copy);
       }
       function deleteAppt(id) {
         if (!confirm("¿Eliminar cita?")) return;
@@ -1742,7 +2295,11 @@
       function travelBetween(a, b) {
         const pa = propOf(a.propertyId), pb = propOf(b.propertyId);
         if (!pa || !pb) return null;
-        return getTravel(pa, pb);
+        const real = getTravel(pa, pb);
+        if (real) return real;
+        const km = haversineKm(pa, pb);
+        if (km == null) return null;
+        return { min: Math.max(5, Math.round(km * 2.5)), km: +km.toFixed(1), fuente: "estimado" };
       }
       function setTravel(from, to, info) {
         from.travelCache = from.travelCache || {};
@@ -1931,18 +2488,16 @@
           west: +sw.lng().toFixed(6),
         };
       }
-      async function geocodeProp() {
-        const p = editingProp.value;
-        if (!p) return;
+      async function geocodeProperty(p, opts = {}) {
+        const silent = !!opts.silent;
+        if (!p) return false;
+        if (!data.config.mapsKey) return false;
         syncDireccionFromMx(p);
         const hasStreet = !!(String(p.calle || "").trim() || String(p.direccion || "").trim());
         const hasColonia = !!String(p.colonia || "").trim();
-        if (!hasStreet && !hasColonia) {
-          toast("Agrega calle o colonia", "err");
-          return;
-        }
+        if (!hasStreet && !hasColonia) return false;
         await ensureMaps();
-        if (!window.google?.maps) return;
+        if (!window.google?.maps) return false;
         mapsBusy.value = true;
         try {
           const geocoder = new google.maps.Geocoder();
@@ -1969,7 +2524,6 @@
             p.lat = +loc.lat().toFixed(6);
             p.lng = +loc.lng().toFixed(6);
           } else if (hasStreet && p.direccion && !p.calle) {
-            // Dirección libre antigua
             const addrRes = await geocodeAddress(geocoder, [p.direccion, p.colonia, municipio, estado, "México"].filter(Boolean).join(", "));
             data.config.apiUsage.geocoding = (data.config.apiUsage.geocoding || 0) + 1;
             const loc = addrRes.geometry.location;
@@ -1978,11 +2532,23 @@
           }
 
           syncDireccionFromMx(p);
-          saveEditingProp();
-          renderPropMap();
-          toast(p.coloniaBounds ? "Ubicación y colonia en el mapa" : "Ubicación encontrada", "ok");
+          if (editingProp.value && editingProp.value.id === p.id) {
+            saveEditingProp();
+            if (propTab.value === "ubicacion") renderPropMap();
+          } else {
+            persist();
+          }
+          if (!silent) {
+            toast(p.coloniaBounds ? "Ubicación y colonia en el mapa" : "Ubicación encontrada", "ok");
+          }
+          mapsBusy.value = false;
+          if (p.lat != null && p.lng != null) {
+            await calcWorkTravelFor(p, { silent: true });
+          }
+          return true;
         } catch (e) {
-          toast("No se pudo geocodificar: " + e.message, "err");
+          if (!silent) toast("No se pudo geocodificar: " + e.message, "err");
+          return false;
         } finally { mapsBusy.value = false; }
       }
 
@@ -2022,9 +2588,13 @@
         return rows;
       }
 
-      async function calcWorkTravel() {
-        const p = editingProp.value;
-        if (!p || p.lat == null) { toast("Ubica la propiedad primero", "err"); return; }
+      async function calcWorkTravelFor(p, opts = {}) {
+        const silent = !!opts.silent;
+        if (!p || p.lat == null || p.lng == null) {
+          if (!silent) toast("Ubica la propiedad primero", "err");
+          return false;
+        }
+        if (!data.config.mapsKey || !data.config.trabajo?.lat) return false;
         mapsBusy.value = true;
         try {
           const rows = await computeRouteMatrix(
@@ -2035,7 +2605,6 @@
           if (!row || row.error) throw new Error(row?.error?.message || "Sin ruta disponible");
           const secs = Number(String(row.duration || "").replace("s", "")) || 0;
           const measuredAt = new Date().toISOString();
-          // Routes API travelMode DRIVE → tiempo y km en carro (no lineal).
           p.trasladoTrabajo = {
             min: Math.round(secs / 60),
             km: row.distanceMeters ? +(row.distanceMeters / 1000).toFixed(1) : null,
@@ -2043,12 +2612,23 @@
             fecha: measuredAt,
             measuredAt,
           };
-          saveEditingProp();
-          Object.assign(manualTravel, { min: p.trasladoTrabajo.min, km: p.trasladoTrabajo.km });
-          toast("Traslado al Tec calculado (carro)", "ok");
+          if (editingProp.value && editingProp.value.id === p.id) {
+            saveEditingProp();
+            Object.assign(manualTravel, { min: p.trasladoTrabajo.min, km: p.trasladoTrabajo.km });
+          } else {
+            persist();
+          }
+          if (!silent) toast("Traslado al Tec calculado (carro)", "ok");
+          return true;
         } catch (e) {
-          toast(e.message || "Error Routes API", "err");
+          if (!silent) toast(e.message || "Error Routes API", "err");
+          return false;
         } finally { mapsBusy.value = false; persist(); }
+      }
+      function onCoordsChange() {
+        if (!editingProp.value) return;
+        saveEditingProp();
+        calcWorkTravelFor(editingProp.value, { silent: true });
       }
 
       function saveManualTravel() {
@@ -2081,10 +2661,23 @@
         }
       }
 
-      async function calcDayTravel(fecha) {
+      async function calcDayTravel(fecha, opts = {}) {
+        const silent = !!opts.silent;
         const appts = data.appointments.filter((a) => a.fecha === fecha && a.estado !== "Cancelada");
-        const props = [...new Map(appts.map((a) => [a.propertyId, propOf(a.propertyId)]).filter(([, p]) => p?.lat != null)).values()];
-        if (props.length < 2) { toast("Se necesitan al menos 2 propiedades ubicadas", "err"); return; }
+        const byId = new Map(appts.map((a) => [a.propertyId, propOf(a.propertyId)]).filter(([, p]) => p?.lat != null));
+        for (const id of opts.extraPropertyIds || []) {
+          const p = propOf(id);
+          if (p?.lat != null) byId.set(p.id, p);
+        }
+        const props = [...byId.values()];
+        if (props.length < 2) {
+          if (!silent) toast("Se necesitan al menos 2 propiedades ubicadas", "err");
+          return false;
+        }
+        if (!data.config.mapsKey) {
+          if (!silent) toast("Falta API key de Maps", "err");
+          return false;
+        }
         mapsBusy.value = true;
         try {
           const rows = await computeRouteMatrix(props, props);
@@ -2102,9 +2695,11 @@
             });
           }
           persist();
-          toast("Traslados del día calculados", "ok");
+          if (!silent) toast("Traslados del día calculados", "ok");
+          return true;
         } catch (e) {
-          toast(e.message || "Error Routes API", "err");
+          if (!silent) toast(e.message || "Error Routes API", "err");
+          return false;
         } finally { mapsBusy.value = false; }
       }
 
@@ -2383,195 +2978,315 @@
       }
 
       /* ---------- Planner ---------- */
-      function runPlanner() {
+      function buildLocalDayPlan(fecha) {
+        const day = data.config.dias.find((d) => d.fecha === fecha);
+        if (!day) return null;
+        const margen = data.config.margen || 15;
+        const durDefault = data.config.duracionDefault || 45;
+        const existing = data.appointments.filter((a) => a.fecha === fecha && a.estado !== "Cancelada" && a.estado !== "Realizada");
+        const fixed = existing.filter((a) => a.estado === "Confirmada" || a.estado === "Reprogramada");
+        const semi = existing.filter((a) => a.estado === "Solicitada");
+        const freeAppts = existing.filter((a) => a.estado === "Por solicitar");
+
+        const occupiedIds = new Set(existing.map((a) => a.propertyId));
+        const candidates = eligibleProperties.value
+          .filter((p) => !occupiedIds.has(p.id) && (p.estado === "Interesante" || p.estado === "Contactado" || p.estado === "Cita solicitada" || p.favorita || p.estado === "Contacto pendiente"))
+          .map((p) => enrichScore(p))
+          .sort((a, b) => (b._score ?? -1) - (a._score ?? -1) || (b.favorita ? 1 : 0) - (a.favorita ? 1 : 0));
+
+        const zones = assignZones(data.properties);
+        const zoneOf = (pid) => zones.find((z) => z.ids.includes(pid))?.id;
+
+        const slots = [];
+        const warnings = [];
+        const suggestions = [];
+        const changes = [];
+
+        function placeFixed(a, label, kind) {
+          const p = propOf(a.propertyId);
+          slots.push({
+            key: a.id, apptId: a.id, propertyId: a.propertyId, hora: a.hora,
+            duracion: a.duracion || durDefault, alias: p?.alias, colonia: p?.colonia,
+            label, kind, zona: zoneOf(a.propertyId), travelMissing: false, fixed: true,
+          });
+        }
+        fixed.forEach((a) => placeFixed(a, "Confirmada (fija)", "confirmed"));
+        semi.forEach((a) => placeFixed(a, "Solicitada (semifija)", "solicitada"));
+
+        const movable = freeAppts.map((a) => ({ appt: a, prop: propOf(a.propertyId) })).filter((x) => x.prop);
+        const newCandidates = candidates.map((p) => ({ appt: null, prop: p }));
+        const pool = [...movable, ...newCandidates];
+        const anchors = [...fixed, ...semi].map((a) => propOf(a.propertyId)).filter((p) => p?.lat != null);
+
+        function priority(item) {
+          const p = item.prop;
+          let score = (enrichScore(p)._score ?? 0) * 10;
+          if (p.favorita) score += 5;
+          if (anchors.length && p.lat != null) {
+            const near = Math.min(...anchors.map((a) => haversineKm(a, p) ?? 99));
+            score += Math.max(0, 5 - near);
+          }
+          return score;
+        }
+        pool.sort((a, b) => priority(b) - priority(a));
+
+        const dayStart = timeToMin(day.desde);
+        const dayEnd = timeToMin(day.hasta);
+
+        function occupiedRanges() {
+          return slots.map((s) => {
+            const start = timeToMin(s.hora);
+            return { start, end: start + s.duracion + margen, slot: s };
+          }).sort((a, b) => a.start - b.start);
+        }
+
+        function findGap(dur, preferAfterProp) {
+          const ranges = occupiedRanges();
+          let cursor = dayStart;
+          const gaps = [];
+          for (const r of ranges) {
+            if (r.start - cursor >= dur + margen) gaps.push({ start: cursor, end: r.start });
+            cursor = Math.max(cursor, r.end);
+          }
+          if (dayEnd - cursor >= dur) gaps.push({ start: cursor, end: dayEnd });
+          if (!gaps.length) return null;
+          gaps.sort((g1, g2) => g1.start - g2.start);
+          for (const g of gaps) {
+            let start = g.start;
+            const prev = occupiedRanges().filter((r) => r.end <= start + margen).pop();
+            if (prev) {
+              const prevProp = propOf(prev.slot.propertyId);
+              const travel = preferAfterProp && prevProp ? getTravel(prevProp, preferAfterProp) : null;
+              if (preferAfterProp && prevProp) {
+                if (!travel) return { start, travelMissing: true, prevId: prevProp.id };
+                start = Math.max(start, prev.start + prev.slot.duracion + travel.min + margen);
+              } else {
+                start = Math.max(start, prev.end);
+              }
+            }
+            if (start + dur <= g.end && start + dur <= dayEnd) {
+              return { start, travelMissing: false };
+            }
+          }
+          return null;
+        }
+
+        for (const item of pool) {
+          const dur = item.appt?.duracion || durDefault;
+          const gap = findGap(dur, item.prop);
+          if (!gap) {
+            warnings.push(`Sin espacio para ${item.prop.alias}`);
+            continue;
+          }
+          const hora = minToTime(gap.start);
+          slots.push({
+            key: "new-" + item.prop.id,
+            apptId: item.appt?.id || null,
+            propertyId: item.prop.id,
+            hora, duracion: dur,
+            alias: item.prop.alias, colonia: item.prop.colonia,
+            label: item.appt ? "Reubicada (libre)" : "Nueva propuesta",
+            kind: "tentative",
+            zona: zoneOf(item.prop.id),
+            travelMissing: gap.travelMissing,
+            fixed: false,
+          });
+          changes.push({
+            type: item.appt ? "update" : "create",
+            apptId: item.appt?.id || null,
+            propertyId: item.prop.id,
+            fecha, hora, duracion: dur,
+          });
+        }
+
+        slots.sort((a, b) => a.hora.localeCompare(b.hora));
+
+        for (let i = 0; i < slots.length - 1; i++) {
+          const a = propOf(slots[i].propertyId), b = propOf(slots[i + 1].propertyId);
+          if (a && b && !getTravel(a, b) && a.lat != null && b.lat != null) {
+            slots[i + 1].travelMissing = true;
+          }
+        }
+
+        for (const s of semi) {
+          const p = propOf(s.propertyId);
+          if (!p?.lat) continue;
+          const neighbors = slots.filter((x) => x.propertyId !== s.propertyId && propOf(x.propertyId)?.lat != null);
+          for (const n of neighbors) {
+            const np = propOf(n.propertyId);
+            const dist = haversineKm(p, np);
+            if (dist != null && dist < 2) {
+              const ideal = minToTime(timeToMin(n.hora) + (n.duracion || 45) + margen);
+              if (ideal !== s.hora) {
+                const ad = data.advisors.find((x) => x.id === (s.advisorId || p.advisorId));
+                suggestions.push({
+                  text: `Convendría pedir cambiar "${p.alias}" (ahora ${s.hora}) cerca de "${n.alias}" hacia las ${ideal}.`,
+                  whatsapp: ad?.whatsapp || ad?.telefono,
+                  message: `Hola ${ad?.nombre || ""}, ¿sería posible reagendar la visita a ${p.alias} alrededor de las ${ideal}? Estaré por la zona.`,
+                });
+                break;
+              }
+            }
+          }
+        }
+
+        if (slots.some((s) => s.travelMissing)) {
+          warnings.push("Hay tramos sin dato de traslado. Usa «Calcular traslados del día» o captura tiempos manuales.");
+        }
+
+        return {
+          fecha,
+          generatedAt: new Date().toISOString(),
+          source: "local",
+          summary: "",
+          slots,
+          warnings,
+          suggestions,
+          changes,
+        };
+      }
+
+      function buildDayPlanAiContext(fecha) {
+        const day = data.config.dias.find((d) => d.fecha === fecha);
+        const durDefault = data.config.duracionDefault || 45;
+        const margen = data.config.margen || 15;
+        const appts = data.appointments.filter((a) => a.fecha === fecha && a.estado !== "Cancelada" && a.estado !== "Realizada");
+        const apptLines = appts.map((a) => {
+          const p = propOf(a.propertyId);
+          return {
+            id: a.id, propertyId: a.propertyId, estado: a.estado, hora: a.hora,
+            duracion: a.duracion || durDefault,
+            alias: p?.alias || "", colonia: p?.colonia || "",
+            lat: p?.lat ?? null, lng: p?.lng ?? null,
+          };
+        });
+        const occupied = new Set(appts.map((a) => a.propertyId));
+        const candidates = eligibleProperties.value
+          .filter((p) => !occupied.has(p.id))
+          .slice(0, 8)
+          .map((p) => ({
+            id: p.id, alias: p.alias, colonia: p.colonia, estado: p.estado,
+            favorita: !!p.favorita, lat: p.lat ?? null, lng: p.lng ?? null,
+          }));
+        const travels = [];
+        for (let i = 0; i < apptLines.length; i++) {
+          for (let j = 0; j < apptLines.length; j++) {
+            if (i === j) continue;
+            const pa = propOf(apptLines[i].propertyId), pb = propOf(apptLines[j].propertyId);
+            const t = pa && pb ? getTravel(pa, pb) : null;
+            if (t?.min != null) {
+              travels.push({ from: apptLines[i].propertyId, to: apptLines[j].propertyId, min: t.min, fuente: t.fuente || "real" });
+            }
+          }
+        }
+        return {
+          fecha,
+          ventana: day ? { desde: day.desde, hasta: day.hasta, label: day.label || "" } : null,
+          duracionDefault: durDefault,
+          margen,
+          citas: apptLines,
+          trasladosMin: travels,
+          candidatos: candidates,
+        };
+      }
+
+      function normalizeAiDayPlan(raw, fecha) {
+        if (!raw || typeof raw !== "object") return null;
+        const durDefault = data.config.duracionDefault || 45;
+        const slots = Array.isArray(raw.slots) ? raw.slots.map((s, i) => {
+          const p = propOf(s.propertyId);
+          return {
+            key: s.key || s.apptId || ("ai-" + (s.propertyId || i)),
+            apptId: s.apptId || null,
+            propertyId: s.propertyId,
+            hora: s.hora,
+            duracion: s.duracion || durDefault,
+            alias: s.alias || p?.alias || "Propiedad",
+            colonia: s.colonia || p?.colonia || "",
+            label: s.label || "Propuesta",
+            kind: s.kind || "tentative",
+            zona: s.zona || "",
+            travelMissing: !!s.travelMissing,
+            fixed: !!s.fixed,
+          };
+        }).filter((s) => s.propertyId && s.hora) : [];
+        const changes = Array.isArray(raw.changes) ? raw.changes.filter((c) => c && (c.type === "create" || c.type === "update")) : [];
+        const suggestions = Array.isArray(raw.suggestions) ? raw.suggestions.map((s) => (
+          typeof s === "string" ? { text: s } : { text: s.text || "", whatsapp: s.whatsapp || "", message: s.message || "" }
+        )).filter((s) => s.text) : [];
+        return {
+          fecha,
+          generatedAt: new Date().toISOString(),
+          source: "ai",
+          summary: String(raw.summary || "").trim(),
+          slots,
+          warnings: Array.isArray(raw.warnings) ? raw.warnings.map(String) : [],
+          suggestions,
+          changes,
+        };
+      }
+
+      function saveDayPlan(plan) {
+        if (!plan?.fecha) return;
+        if (!data.dayPlans || typeof data.dayPlans !== "object") data.dayPlans = {};
+        data.dayPlans[plan.fecha] = plan;
+        persist();
+      }
+
+      function discardDayPlan() {
+        const fecha = agendaDay.value;
+        if (data.dayPlans?.[fecha]) {
+          delete data.dayPlans[fecha];
+          persist();
+        }
+      }
+
+      async function runPlanner() {
+        const fecha = agendaDay.value;
+        const day = data.config.dias.find((d) => d.fecha === fecha);
+        if (!day) { toast("Día no configurado", "err"); return; }
         plannerBusy.value = true;
-        plannerResult.value = null;
         try {
-          const fecha = agendaDay.value;
-          const day = data.config.dias.find((d) => d.fecha === fecha);
-          if (!day) { toast("Día no configurado", "err"); return; }
-          const margen = data.config.margen || 15;
-          const durDefault = data.config.duracionDefault || 45;
-          const existing = data.appointments.filter((a) => a.fecha === fecha && a.estado !== "Cancelada" && a.estado !== "Realizada");
-          const fixed = existing.filter((a) => a.estado === "Confirmada" || a.estado === "Reprogramada");
-          const semi = existing.filter((a) => a.estado === "Solicitada");
-          const freeAppts = existing.filter((a) => a.estado === "Por solicitar");
-
-          const occupiedIds = new Set(existing.map((a) => a.propertyId));
-          const candidates = eligibleProperties.value
-            .filter((p) => !occupiedIds.has(p.id) && (p.estado === "Interesante" || p.estado === "Contactado" || p.estado === "Cita solicitada" || p.favorita || p.estado === "Contacto pendiente"))
-            .map((p) => enrichScore(p))
-            .sort((a, b) => (b._score ?? -1) - (a._score ?? -1) || (b.favorita ? 1 : 0) - (a.favorita ? 1 : 0));
-
-          const zones = assignZones(data.properties);
-          const zoneOf = (pid) => zones.find((z) => z.ids.includes(pid))?.id;
-
-          // Build fixed timeline
-          const slots = [];
-          const warnings = [];
-          const suggestions = [];
-          const changes = [];
-
-          function placeFixed(a, label, kind) {
-            const p = propOf(a.propertyId);
-            slots.push({
-              key: a.id, apptId: a.id, propertyId: a.propertyId, hora: a.hora,
-              duracion: a.duracion || durDefault, alias: p?.alias, colonia: p?.colonia,
-              label, kind, zona: zoneOf(a.propertyId), travelMissing: false, fixed: true,
-            });
-          }
-          fixed.forEach((a) => placeFixed(a, "Confirmada (fija)", "confirmed"));
-          semi.forEach((a) => placeFixed(a, "Solicitada (semifija)", "solicitada"));
-
-          // Keep free appts but allow reschedule
-          const movable = freeAppts.map((a) => ({ appt: a, prop: propOf(a.propertyId) })).filter((x) => x.prop);
-          const newCandidates = candidates.map((p) => ({ appt: null, prop: p }));
-          const pool = [...movable, ...newCandidates];
-
-          // Sort pool by zone clustering around fixed points
-          const anchors = [...fixed, ...semi].map((a) => propOf(a.propertyId)).filter((p) => p?.lat != null);
-
-          function priority(item) {
-            const p = item.prop;
-            let score = (enrichScore(p)._score ?? 0) * 10;
-            if (p.favorita) score += 5;
-            if (anchors.length && p.lat != null) {
-              const near = Math.min(...anchors.map((a) => haversineKm(a, p) ?? 99));
-              score += Math.max(0, 5 - near);
-            }
-            return score;
-          }
-          pool.sort((a, b) => priority(b) - priority(a));
-
-          const dayStart = timeToMin(day.desde);
-          const dayEnd = timeToMin(day.hasta);
-
-          function occupiedRanges() {
-            return slots.map((s) => {
-              const start = timeToMin(s.hora);
-              return { start, end: start + s.duracion + margen, slot: s };
-            }).sort((a, b) => a.start - b.start);
-          }
-
-          function findGap(dur, preferAfterProp) {
-            const ranges = occupiedRanges();
-            let cursor = dayStart;
-            const gaps = [];
-            for (const r of ranges) {
-              if (r.start - cursor >= dur + margen) gaps.push({ start: cursor, end: r.start });
-              cursor = Math.max(cursor, r.end);
-            }
-            if (dayEnd - cursor >= dur) gaps.push({ start: cursor, end: dayEnd });
-
-            if (!gaps.length) return null;
-
-            // Prefer gap near preferAfterProp
-            if (preferAfterProp?.lat != null) {
-              // score gaps by travel from nearest neighbor at gap edges — use haversine only for ordering preference of gap, NOT as time
-              gaps.sort((g1, g2) => {
-                // prefer earlier gaps that are geographically near: use zone heuristic via last slot before gap
-                return g1.start - g2.start;
-              });
-            }
-            for (const g of gaps) {
-              let start = g.start;
-              // If there's a previous slot, need travel time
-              const prev = occupiedRanges().filter((r) => r.end <= start + margen).pop();
-              if (prev) {
-                const prevProp = propOf(prev.slot.propertyId);
-                const travel = preferAfterProp && prevProp ? getTravel(prevProp, preferAfterProp) : null;
-                if (preferAfterProp && prevProp) {
-                  if (!travel) {
-                    // cannot schedule tightly without data — leave visible hole at this gap start
-                    return { start, travelMissing: true, prevId: prevProp.id };
-                  }
-                  start = Math.max(start, prev.start + prev.slot.duracion + travel.min + margen);
-                } else {
-                  start = Math.max(start, prev.end);
-                }
-              }
-              if (start + dur <= g.end && start + dur <= dayEnd) {
-                return { start, travelMissing: false };
-              }
-            }
-            return null;
-          }
-
-          for (const item of pool) {
-            const dur = item.appt?.duracion || durDefault;
-            const gap = findGap(dur, item.prop);
-            if (!gap) {
-              warnings.push(`Sin espacio para ${item.prop.alias}`);
-              continue;
-            }
-            const hora = minToTime(gap.start);
-            slots.push({
-              key: "new-" + item.prop.id,
-              apptId: item.appt?.id || null,
-              propertyId: item.prop.id,
-              hora, duracion: dur,
-              alias: item.prop.alias, colonia: item.prop.colonia,
-              label: item.appt ? "Reubicada (libre)" : "Nueva propuesta",
-              kind: "tentative",
-              zona: zoneOf(item.prop.id),
-              travelMissing: gap.travelMissing,
-              fixed: false,
-            });
-            changes.push({
-              type: item.appt ? "update" : "create",
-              apptId: item.appt?.id || null,
-              propertyId: item.prop.id,
-              fecha, hora, duracion: dur,
-            });
-          }
-
-          slots.sort((a, b) => a.hora.localeCompare(b.hora));
-
-          // Mark travel missing between consecutive
-          for (let i = 0; i < slots.length - 1; i++) {
-            const a = propOf(slots[i].propertyId), b = propOf(slots[i + 1].propertyId);
-            if (a && b && !getTravel(a, b) && a.lat != null && b.lat != null) {
-              slots[i + 1].travelMissing = true;
+          await calcDayTravel(fecha, { silent: true });
+          let plan = null;
+          if (data.config.openaiKey) {
+            try {
+              const ctx = buildDayPlanAiContext(fecha);
+              const content = await askAI([
+                {
+                  role: "system",
+                  content: `Eres el planificador de visitas de HomeFinder (renta en Monterrey).
+Responde SOLO un JSON válido (sin markdown) con: summary (string corto), warnings (string[]), suggestions ({text,whatsapp?,message?}[]), slots ({key?,apptId?,propertyId,hora,duracion,alias?,colonia?,label,kind,travelMissing?,fixed?}[]), changes ({type:"create"|"update",apptId?,propertyId,fecha,hora,duracion}[]).
+Reglas: Confirmada/Reprogramada son fijas; Solicitada es semifija (no muevas su hora en changes; puedes sugerir WhatsApp). Solo crea/reubica citas Por solicitar o candidatos nuevos. No inventes minutos de ruta: usa trasladosMin del contexto. Respeta ventana, duración y margen.`,
+                },
+                { role: "user", content: JSON.stringify(ctx) },
+              ]);
+              const parsed = JSON.parse(String(content || "").replace(/```json|```/g, "").trim());
+              plan = normalizeAiDayPlan(parsed, fecha);
+              if (!plan || !plan.slots.length) plan = null;
+            } catch (e) {
+              plan = null;
+              toast("IA no disponible — plan local", "err");
             }
           }
-
-          // Suggestions for semi-fixed if nearby free slot would be better geographically
-          for (const s of semi) {
-            const p = propOf(s.propertyId);
-            if (!p?.lat) continue;
-            const neighbors = slots.filter((x) => x.propertyId !== s.propertyId && propOf(x.propertyId)?.lat != null);
-            for (const n of neighbors) {
-              const np = propOf(n.propertyId);
-              const dist = haversineKm(p, np);
-              if (dist != null && dist < 2) {
-                const ideal = minToTime(timeToMin(n.hora) + (n.duracion || 45) + margen);
-                if (ideal !== s.hora) {
-                  const ad = data.advisors.find((x) => x.id === (s.advisorId || p.advisorId));
-                  suggestions.push({
-                    text: `Convendría pedir cambiar "${p.alias}" (ahora ${s.hora}) cerca de "${n.alias}" hacia las ${ideal}.`,
-                    whatsapp: ad?.whatsapp || ad?.telefono,
-                    message: `Hola ${ad?.nombre || ""}, ¿sería posible reagendar la visita a ${p.alias} alrededor de las ${ideal}? Estaré por la zona.`,
-                  });
-                  break;
-                }
-              }
-            }
-          }
-
-          if (slots.some((s) => s.travelMissing)) {
-            warnings.push("Hay tramos sin dato de traslado. Usa «Calcular traslados del día» o captura tiempos manuales.");
-          }
-
-          plannerResult.value = { slots, warnings, suggestions, changes, fecha };
+          if (!plan) plan = buildLocalDayPlan(fecha);
+          if (!plan) { toast("No se pudo generar propuesta", "err"); return; }
+          saveDayPlan(plan);
+          toast(
+            plan.source === "ai" ? "Propuesta con IA lista"
+              : (data.config.openaiKey ? "Propuesta local lista" : "Sin IA — plan local"),
+            "ok"
+          );
         } finally {
           plannerBusy.value = false;
         }
       }
 
       function applyPlanner() {
-        if (!plannerResult.value) return;
-        const { changes, fecha } = plannerResult.value;
-        for (const ch of changes) {
+        const plan = plannerResult.value;
+        if (!plan) return;
+        const { changes, fecha } = plan;
+        for (const ch of changes || []) {
           if (ch.type === "update" && ch.apptId) {
             const a = data.appointments.find((x) => x.id === ch.apptId);
             if (a) { a.hora = ch.hora; a.duracion = ch.duracion; }
@@ -2579,12 +3294,15 @@
             data.appointments.push(newAppt({
               propertyId: ch.propertyId,
               advisorId: propOf(ch.propertyId)?.advisorId || "",
-              fecha, hora: ch.hora, duracion: ch.duracion, estado: "Por solicitar",
+              fecha: ch.fecha || fecha,
+              hora: ch.hora,
+              duracion: ch.duracion,
+              estado: "Por solicitar",
             }));
           }
         }
+        if (data.dayPlans?.[fecha]) delete data.dayPlans[fecha];
         persist();
-        plannerResult.value = null;
         agendaMode.value = "day";
         toast("Propuesta aplicada. Confirma con los asesores.", "ok");
         nextTick(() => renderDayMap());
@@ -2915,17 +3633,20 @@ Contexto:\n${buildContext()}`;
           const content = await askAI([
             {
               role: "system",
-              content: `Extrae datos de un anuncio inmobiliario de Monterrey. Responde SOLO un JSON válido con estas claves (usa null si no aparece en el texto; NUNCA inventes): alias, colonia, direccion, renta, mantenimiento, deposito, recamaras, banos, estacionamiento, m2Const, amueblado (sin|semi|full|pc), perros (si|no|pc), jardin (si|no|pc), terraza (si|no|pc), enlace, observaciones. Sin markdown.`,
+              content: `Extrae datos de un anuncio inmobiliario de Monterrey. Responde SOLO un JSON válido con estas claves (usa null si no aparece en el texto; NUNCA inventes): alias, calle, numeroExt, numeroInt, colonia, municipio, estadoMx, cp, renta, mantenimiento, deposito, recamaras, banos, estacionamiento, m2Const, amueblado (sin|semi|full|pc), perros (si|no|pc), jardin (si|no|pc), terraza (si|no|pc), enlace, observaciones. Sin markdown.`,
             },
             { role: "user", content: pasteText.value },
           ]);
           const json = JSON.parse(content.replace(/```json|```/g, "").trim());
           extractForm.value = {
             alias: json.alias || "",
+            calle: json.calle || "",
+            numeroExt: json.numeroExt || "",
+            numeroInt: json.numeroInt || "",
             colonia: json.colonia || "",
-            direccion: json.direccion || "",
-            calle: json.calle || json.direccion || "",
             municipio: json.municipio || "",
+            estadoMx: json.estadoMx || "Nuevo León",
+            cp: json.cp || "",
             renta: json.renta ?? null,
             mantenimiento: json.mantenimiento ?? null,
             recamaras: json.recamaras ?? null,
@@ -2950,10 +3671,13 @@ Contexto:\n${buildContext()}`;
         if (!f) return;
         const p = newProperty({
           alias: f.alias || (f.colonia ? "Casa " + f.colonia : "Desde anuncio"),
-          colonia: f.colonia,
           calle: f.calle || "",
+          numeroExt: f.numeroExt || "",
+          numeroInt: f.numeroInt || "",
+          colonia: f.colonia || "",
           municipio: f.municipio || "",
-          direccion: f.direccion || "",
+          estadoMx: f.estadoMx || "Nuevo León",
+          cp: f.cp || "",
           enlace: f.enlace,
           observaciones: f.observaciones,
           amueblado: f.amueblado,
@@ -2963,7 +3687,6 @@ Contexto:\n${buildContext()}`;
           espacios: { jardin: f.jardin || "pc", terraza: f.terraza || "pc", balcon: "pc" },
           perros: { ...newProperty().perros, acepta: f.perros || "pc" },
         });
-        if (!p.calle && p.direccion) p.calle = p.direccion;
         syncDireccionFromMx(p);
         if (p.perros.acepta === "no") {
           p.estado = "Descartada";
@@ -2972,15 +3695,42 @@ Contexto:\n${buildContext()}`;
         data.properties.unshift(p);
         persist();
         modals.pasteAd = false;
+        geocodeProperty(p, { silent: true });
         toast("Propiedad creada desde anuncio", "ok");
         if (p.enlace) applyCoverPhoto(p, { notify: true });
         openProperty(p.id);
       }
 
       /* ---------- Watchers / lifecycle ---------- */
-      watch(agendaDay, () => { plannerResult.value = null; nextTick(() => renderDayMap()); });
+      watch(agendaDay, () => { nextTick(() => renderDayMap()); });
       watch(agendaMode, (m) => { if (m === "day") nextTick(() => renderDayMap()); });
       watch(view, (v) => { if (v === "agenda") nextTick(() => renderDayMap()); });
+      watch(
+        () => [
+          modals.appt,
+          apptForm.fecha,
+          apptForm.hora,
+          apptForm.duracion,
+          apptForm.propertyId,
+          apptFormConflictOthers.value.map((d) => d.id).join(","),
+        ],
+        () => {
+          clearTimeout(apptResolveTimer);
+          if (!modals.appt) {
+            clearApptResolve();
+            return;
+          }
+          apptResolveTimer = setTimeout(async () => {
+            if (!apptFormConflictOthers.value.length) {
+              clearApptResolve();
+              return;
+            }
+            const fp = apptResolveKey();
+            if (fp === apptResolveFingerprint && apptResolveOptions.value.length) return;
+            await suggestApptResolve({ quiet: true });
+          }, 600);
+        }
+      );
 
       onMounted(async () => {
         if (!syncConfigured()) {
@@ -3002,10 +3752,11 @@ Contexto:\n${buildContext()}`;
         window.addEventListener("keydown", (ev) => {
           if (ev.key !== "Escape") return;
           if (apptMenuId.value) { apptMenuId.value = null; return; }
+          if (rankFilterModal.open) { closeRankFilter(); return; }
           if (modals.discard) { modals.discard = false; return; }
           if (modals.appt) { modals.appt = false; return; }
           if (modals.advisor) { closeAdvisorForm(); return; }
-          if (modals.quickAdd) { modals.quickAdd = false; return; }
+          if (modals.quickAdd) { closeQuickAdd(); return; }
           if (modals.pasteAd) { modals.pasteAd = false; return; }
           if (showCompare.value) { showCompare.value = false; return; }
           if (modals.property) { closeProperty(); return; }
@@ -3034,18 +3785,24 @@ Contexto:\n${buildContext()}`;
         editingProp, propTab, propTabs, photoUrl, photoBusy, galleryAddOpen, lightbox, photoMode, uploadProgress,
         captureInputEl, uploadInputEl, newReqName, openReqs, manualTravel,
         propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
-        rankSort, rankOnlyEligible, compareIds, showCompare, secs,
+        rankOnlyEligible, rankColSort, rankFilters, toggleRankSort, rankSortMark,
+        rankFilterModal, rankFilterDraft, rankFilterActive, openRankFilter, closeRankFilter,
+        applyRankFilter, clearRankFilterCol, clearAllRankFilters, rankAnyFilterActive,
+        rankFilterModalTitle, rankFilterModalType,
+        compareIds, showCompare, secs,
         mapsReady, mapsBusy, propMapEl, propTabsEl, dayMapEl, overviewMapEl, showOverviewMap,
         aiOpen, aiInput, aiMessages, aiBusy, aiSummarizing, pendingActions, aiMsgs,
         activeAiSummary, formatAiChatLabel,
         // computed
         filteredProperties, eligibleProperties, discardedProperties, stats,
         upcomingAppts, pendingConfirm, advisorFollowups, rankedProperties, top5,
-        compareProps, weightsSum, dayAppts, dayConflicts,
+        compareProps, weightsSum, dayAppts, dayConflicts, dayConflictIds, apptHasConflict,
+        apptFormConflicts, apptFormConflictOthers, apptResolveOptions, apptResolveBusy,
         // methods
         money, totalMensual, desembolsoInicial, reqCosts, amuebladoLabel, descarteLabel,
         formatDay, formatDayShort, scoreEval, fmtScore, persist, formatDireccionMX, saveMxAddress,
-        openQuickAdd, saveQuickAdd, openProperty, closeProperty, saveEditingProp, onPropTab,
+        openQuickAdd, closeQuickAdd, quickNewPropertyForAppt, saveQuickAdd, propertyAssignTarget,
+        openProperty, closeProperty, saveEditingProp, onPropTab,
         duplicateProp, deleteProp, changeEstado, confirmDiscard, onPerrosChange,
         setTri, setScore, addPhotoUrl, removePhoto, setCoverPhoto, onEnlaceChange,
         cloudinaryConfigured, toggleGalleryAdd, chooseGalleryPhone, chooseGalleryListing,
@@ -3053,18 +3810,19 @@ Contexto:\n${buildContext()}`;
         onCaptureFilesSelected, onUploadFilesSelected, fotoFuenteLabel, fotoFuenteBadge,
         openLightbox, closeLightbox, lightboxPrev, lightboxNext, lightboxPhotos,
         addCustomReq, removeReq, reqProgress, toggleReqOpen, tabBadge, quickNewAdvisor,
-        propOf, propName, advisorOf, advisorName, propsOfAdvisor, apptsOf,
+        propOf, propName, advisorOf, advisorName, apptAdvisorLine, propsOfAdvisor, apptsOf,
         openAdvisorForm, closeAdvisorForm, saveAdvisor, deleteAdvisor, addAdvisorNote,
         otraPersona, haVisto, toggleVisto, marcarVistoYo, addComentario, removeComentario, formatCommentDate,
         apptMenuId, toggleApptMenu, editApptFromMenu, deleteApptFromMenu,
         openApptForm, onApptPropertyChange, quickNewAdvisorForAppt, saveAppt, deleteAppt,
+        applyApptResolve, suggestApptResolve, clearApptResolve, resolveOptLabel, conflictTravelLine,
         apptClass, apptBadgeClass, estadoBadge, dayWindowLabel,
-        travelBetween, calcDayTravel, calcWorkTravel, saveManualTravel, formatTrasladoMeasure, geocodeProp,
+        travelBetween, calcDayTravel, calcWorkTravelFor, onCoordsChange, saveManualTravel, formatTrasladoMeasure, geocodeProperty,
         allPlaceCats, customCatForm, serviciosOf, formatServicioLine, openServicioRoute,
         searchBasicPlaces, searchOnePlace, addCustomPlaceCat, removeCustomPlaceCat,
         openInMaps, navigateTo, toggleOverviewMap, mapQuery,
         openWhatsApp, whatsappForProp, whatsappForAppt,
-        runPlanner, applyPlanner, toggleCompare,
+        runPlanner, applyPlanner, discardDayPlan, toggleCompare,
         toggleSec, addVisitDay, exportBackup, importBackup, restoreBackup,
         retrySync, forcePull, forcePush, resolveConflict, onMapsKeyChange,
         sendAI, openAiPanel, newAiChat, selectAiChat, deleteAiChat, applyAIActions, openPasteAd, extractAd, saveExtracted,
