@@ -1003,18 +1003,88 @@
         editingProp.value.evaluacion[kind].scores[key] = n;
         saveEditingProp();
       }
+      function photoFromUrl(imgUrl) {
+        if (!imgUrl) return null;
+        let abs = String(imgUrl).trim();
+        if (abs.startsWith("//")) abs = "https:" + abs;
+        if (!/^https?:\/\//i.test(abs)) return null;
+        return { id: uid(), url: abs, thumb: abs, fuente: "anuncio", addedAt: new Date().toISOString() };
+      }
+
+      function extractOgImage(html) {
+        if (!html) return null;
+        const patterns = [
+          /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
+          /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i,
+          /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
+          /<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i,
+        ];
+        for (const re of patterns) {
+          const m = html.match(re);
+          if (m?.[1]) return m[1];
+        }
+        return null;
+      }
+
+      async function fetchCoverViaMicrolink(raw) {
+        const endpoint = "https://api.microlink.io/?url=" + encodeURIComponent(raw);
+        const res = await fetch(endpoint);
+        const json = await res.json().catch(() => ({}));
+        if (json.status === "success") {
+          const img = json.data?.image;
+          const imgUrl = typeof img === "string" ? img : (img?.url || null);
+          return { ok: !!imgUrl, imgUrl, antibot: false, message: imgUrl ? "" : "Sin imagen en la vista previa" };
+        }
+        const antibot = json.code === "EPROXYNEEDED" || /antibot/i.test(JSON.stringify(json.data || {}));
+        return {
+          ok: false,
+          imgUrl: null,
+          antibot,
+          message: antibot
+            ? "Este portal bloquea la extracción automática (antibot)."
+            : (json.message || json.data?.url || "Microlink no pudo leer el anuncio"),
+        };
+      }
+
+      async function fetchCoverViaHtmlProxy(raw) {
+        // Respaldo: leer HTML vía proxy público y sacar og:image
+        const proxies = [
+          (u) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+          (u) => "https://corsproxy.io/?" + encodeURIComponent(u),
+        ];
+        let lastErr = "";
+        for (const make of proxies) {
+          try {
+            const res = await fetch(make(raw), { signal: AbortSignal.timeout?.(20000) });
+            if (!res.ok) { lastErr = "proxy " + res.status; continue; }
+            const html = await res.text();
+            const img = extractOgImage(html);
+            if (img) return { ok: true, imgUrl: img, message: "" };
+            lastErr = "sin og:image";
+          } catch (e) {
+            lastErr = e.message || "proxy falló";
+          }
+        }
+        return { ok: false, imgUrl: null, message: lastErr };
+      }
+
       async function fetchCoverFromEnlace(url) {
         const raw = String(url || "").trim();
         if (!/^https?:\/\//i.test(raw)) return null;
-        const endpoint = "https://api.microlink.io/?url=" + encodeURIComponent(raw);
-        const res = await fetch(endpoint);
-        if (!res.ok) throw new Error("No se pudo leer el anuncio (" + res.status + ")");
-        const json = await res.json();
-        if (json.status !== "success") throw new Error(json.message || "Sin vista previa del enlace");
-        const img = json.data?.image;
-        const imgUrl = typeof img === "string" ? img : (img?.url || null);
-        if (!imgUrl) return null;
-        return { id: uid(), url: imgUrl, thumb: imgUrl, fuente: "anuncio", addedAt: new Date().toISOString() };
+
+        const primary = await fetchCoverViaMicrolink(raw);
+        if (primary.ok) return photoFromUrl(primary.imgUrl);
+
+        // Si Microlink falla (p. ej. Pincali antibot), intentar HTML
+        const fallback = await fetchCoverViaHtmlProxy(raw);
+        if (fallback.ok) return photoFromUrl(fallback.imgUrl);
+
+        if (primary.antibot) {
+          throw new Error(
+            "Este sitio (p. ej. Pincali) bloquea la extracción automática. Abre el anuncio, clic derecho en una foto → «Copiar dirección de imagen» y pégala en Agregar URL."
+          );
+        }
+        throw new Error(primary.message || fallback.message || "No se pudo obtener la foto del anuncio");
       }
 
       async function applyCoverPhoto(prop, opts = {}) {
