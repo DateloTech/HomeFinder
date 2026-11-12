@@ -430,12 +430,14 @@
         if (data.config.gistId) data.config.gistId = String(data.config.gistId).trim();
       }
 
-      // githubToken NUNCA al Gist: GitHub lo detecta y lo revoca.
-      // personaActiva es por dispositivo. mapsKey y openaiKey sí viajan (riesgo aceptado).
+      // Nunca subir secretos al Gist: GitHub/proveedores los detectan y los revocan.
+      // personaActiva es por dispositivo; tampoco se sincroniza.
       function toSyncPayload() {
         const payload = JSON.parse(JSON.stringify(data));
         if (payload.config) {
           payload.config.githubToken = "";
+          payload.config.mapsKey = "";
+          payload.config.openaiKey = "";
           payload.config.personaActiva = "";
         }
         return payload;
@@ -444,11 +446,15 @@
       function preserveLocalSecrets(applyFn) {
         const secrets = {
           githubToken: data.config.githubToken || "",
-          personaActiva: PERSONAS.includes(data.config.personaActiva) ? data.config.personaActiva : "Brandon",
+          mapsKey: data.config.mapsKey || "",
+          openaiKey: data.config.openaiKey || "",
           openaiModel: data.config.openaiModel || "gpt-4o-mini",
+          personaActiva: PERSONAS.includes(data.config.personaActiva) ? data.config.personaActiva : "Brandon",
         };
         applyFn();
         data.config.githubToken = secrets.githubToken;
+        data.config.mapsKey = secrets.mapsKey;
+        data.config.openaiKey = secrets.openaiKey;
         data.config.personaActiva = secrets.personaActiva;
         if (!data.config.openaiModel) data.config.openaiModel = secrets.openaiModel;
       }

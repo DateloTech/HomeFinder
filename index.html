@@ -415,7 +415,7 @@
         <div class="section">
           <button class="section-h" @click="toggleSec('sync')"><i class="ph ph-cloud"></i> Sincronización (Gist) <span class="grow"></span><i class="ph" :class="secs.sync?'ph-caret-up':'ph-caret-down'"></i></button>
           <div class="section-b" v-show="secs.sync">
-            <p class="small muted mb-12">Crea un Personal Access Token de GitHub con permiso <code>gist</code>. El token de GitHub se queda solo en este navegador (si se sube, GitHub lo revoca). Maps y OpenAI sí se sincronizan por el Gist, bajo tu propio riesgo.</p>
+            <p class="small muted mb-12">Crea un Personal Access Token de GitHub con permiso <code>gist</code>. La app crea o usa un Gist privado. El token, Maps y OpenAI se quedan solo en este navegador; no se suben al Gist.</p>
             <div class="field mb-8"><label>GitHub token</label><input type="password" v-model="data.config.githubToken" @change="persist" placeholder="ghp_…" autocomplete="off" spellcheck="false" /></div>
             <div class="field mb-8"><label>Gist ID (usa el mismo en todos los navegadores)</label><input v-model="data.config.gistId" @change="persist" placeholder="d2b5d3da8664fdaf2db331b8080c959f" spellcheck="false" /></div>
             <p class="tiny muted mb-8">Gist compartido: <code>d2b5d3da8664fdaf2db331b8080c959f</code></p>
@@ -432,7 +432,7 @@
           <button class="section-h" @click="toggleSec('maps')"><i class="ph ph-map-pin"></i> Google Maps <span class="grow"></span><i class="ph" :class="secs.maps?'ph-caret-up':'ph-caret-down'"></i></button>
           <div class="section-b" v-show="secs.maps">
             <div class="field mb-8"><label>API Key</label><input type="password" v-model="data.config.mapsKey" @change="onMapsKeyChange" /></div>
-            <p class="small muted">Habilita: Maps JavaScript, Geocoding, Routes y Places. Restringe por dominio. Esta key se sincroniza por Gist.</p>
+            <p class="small muted">Habilita: Maps JavaScript, Geocoding, Routes y Places. Restringe por dominio. La key queda solo en este dispositivo.</p>
             <div class="kv mt-12">
               <dt>Llamadas Geocoding</dt><dd>{{ data.config.apiUsage?.geocoding || 0 }}</dd>
               <dt>Llamadas Routes</dt><dd>{{ data.config.apiUsage?.routes || 0 }}</dd>
@@ -460,7 +460,6 @@
         <div class="section">
           <button class="section-h" @click="toggleSec('ai')"><i class="ph ph-robot"></i> OpenAI <span class="grow"></span><i class="ph" :class="secs.ai?'ph-caret-up':'ph-caret-down'"></i></button>
           <div class="section-b" v-show="secs.ai">
-            <p class="small muted mb-8">La API key se sincroniza por Gist (bajo tu propio riesgo).</p>
             <div class="field mb-8"><label>API Key</label><input type="password" v-model="data.config.openaiKey" @change="persist" /></div>
             <div class="field"><label>Modelo</label><input v-model="data.config.openaiModel" @change="persist" placeholder="gpt-4o-mini" /></div>
           </div>
