@@ -393,8 +393,9 @@
           <button class="section-h" @click="toggleSec('sync')"><i class="ph ph-cloud"></i> Sincronización (Gist) <span class="grow"></span><i class="ph" :class="secs.sync?'ph-caret-up':'ph-caret-down'"></i></button>
           <div class="section-b" v-show="secs.sync">
             <p class="small muted mb-12">Crea un Personal Access Token de GitHub con permiso <code>gist</code>. La app crea o usa un Gist privado.</p>
-            <div class="field mb-8"><label>GitHub token</label><input type="password" v-model="data.config.githubToken" @change="persist" placeholder="ghp_…" /></div>
-            <div class="field mb-8"><label>Gist ID (se crea solo si está vacío)</label><input v-model="data.config.gistId" @change="persist" /></div>
+            <div class="field mb-8"><label>GitHub token</label><input type="password" v-model="data.config.githubToken" @change="persist" placeholder="ghp_…" autocomplete="off" spellcheck="false" /></div>
+            <div class="field mb-8"><label>Gist ID (usa el mismo en todos los navegadores)</label><input v-model="data.config.gistId" @change="persist" placeholder="d2b5d3da8664fdaf2db331b8080c959f" spellcheck="false" /></div>
+            <p class="tiny muted mb-8">Gist compartido: <code>d2b5d3da8664fdaf2db331b8080c959f</code></p>
             <div class="row">
               <button class="btn" @click="forcePull">Forzar descarga</button>
               <button class="btn" @click="forcePush">Forzar subida</button>

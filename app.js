@@ -351,7 +351,13 @@
         return !!(data.config.githubToken && String(data.config.githubToken).trim());
       }
 
+      function normalizeSyncConfig() {
+        if (data.config.githubToken) data.config.githubToken = String(data.config.githubToken).trim();
+        if (data.config.gistId) data.config.gistId = String(data.config.gistId).trim();
+      }
+
       function persist(opts = {}) {
+        normalizeSyncConfig();
         data.updatedAt = new Date().toISOString();
         if (!opts.keepRev) data.rev = (Number(data.rev) || 0) + 1;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -404,6 +410,7 @@
       }
 
       async function gistHeaders() {
+        normalizeSyncConfig();
         return {
           Accept: "application/vnd.github+json",
           Authorization: "Bearer " + data.config.githubToken,
