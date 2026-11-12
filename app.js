@@ -356,6 +356,31 @@
         if (data.config.gistId) data.config.gistId = String(data.config.gistId).trim();
       }
 
+      // Nunca subir secretos al Gist: GitHub los detecta y revoca el token automáticamente.
+      function toSyncPayload() {
+        const payload = JSON.parse(JSON.stringify(data));
+        if (payload.config) {
+          payload.config.githubToken = "";
+          payload.config.mapsKey = "";
+          payload.config.openaiKey = "";
+        }
+        return payload;
+      }
+
+      function preserveLocalSecrets(applyFn) {
+        const secrets = {
+          githubToken: data.config.githubToken || "",
+          mapsKey: data.config.mapsKey || "",
+          openaiKey: data.config.openaiKey || "",
+          openaiModel: data.config.openaiModel || "gpt-4o-mini",
+        };
+        applyFn();
+        data.config.githubToken = secrets.githubToken;
+        data.config.mapsKey = secrets.mapsKey;
+        data.config.openaiKey = secrets.openaiKey;
+        if (!data.config.openaiModel) data.config.openaiModel = secrets.openaiModel;
+      }
+
       function persist(opts = {}) {
         normalizeSyncConfig();
         data.updatedAt = new Date().toISOString();
@@ -468,7 +493,7 @@
         sync.detail = "Subiendo cambios…";
         try {
           if (!data.config.gistId) {
-            await createGist(JSON.parse(JSON.stringify(data)));
+            await createGist(toSyncPayload());
             syncMeta.knownRev = data.rev;
             syncMeta.pending = false;
             syncMeta.lastSyncAt = new Date().toISOString();
@@ -498,7 +523,7 @@
           const res = await fetch("https://api.github.com/gists/" + data.config.gistId, {
             method: "PATCH",
             headers: await gistHeaders(),
-            body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(data, null, 2) } } }),
+            body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(toSyncPayload(), null, 2) } } }),
           });
           if (!res.ok) throw new Error("Error al subir (" + res.status + ")");
           syncMeta.knownRev = data.rev;
@@ -544,17 +569,19 @@
       }
 
       function applyRemote(remote) {
-        const migrated = migrate(remote);
-        data.rev = migrated.rev;
-        data.updatedAt = migrated.updatedAt;
-        data.properties.splice(0, data.properties.length, ...(migrated.properties || []));
-        data.advisors.splice(0, data.advisors.length, ...(migrated.advisors || []));
-        data.appointments.splice(0, data.appointments.length, ...(migrated.appointments || []));
-        Object.assign(data.config, migrated.config);
-        Object.assign(data.config.ponderaciones, migrated.config.ponderaciones || {});
-        Object.assign(data.config.trabajo, migrated.config.trabajo || {});
-        Object.assign(data.config.apiUsage, migrated.config.apiUsage || {});
-        data.config.dias.splice(0, data.config.dias.length, ...(migrated.config.dias || []));
+        preserveLocalSecrets(() => {
+          const migrated = migrate(remote);
+          data.rev = migrated.rev;
+          data.updatedAt = migrated.updatedAt;
+          data.properties.splice(0, data.properties.length, ...(migrated.properties || []));
+          data.advisors.splice(0, data.advisors.length, ...(migrated.advisors || []));
+          data.appointments.splice(0, data.appointments.length, ...(migrated.appointments || []));
+          Object.assign(data.config, migrated.config);
+          Object.assign(data.config.ponderaciones, migrated.config.ponderaciones || {});
+          Object.assign(data.config.trabajo, migrated.config.trabajo || {});
+          Object.assign(data.config.apiUsage, migrated.config.apiUsage || {});
+          data.config.dias.splice(0, data.config.dias.length, ...(migrated.config.dias || []));
+        });
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
         if (data.config.mapsKey) ensureMaps();
       }
