@@ -33,13 +33,13 @@
       <section v-if="view==='home'">
         <div class="page-head"><h1>Inicio</h1></div>
         <div class="stat-grid mb-16">
-          <div class="stat"><div class="n">{{ stats.total }}</div><div class="l">Registradas</div></div>
-          <div class="stat"><div class="n">{{ stats.contactPending }}</div><div class="l">Por contactar</div></div>
-          <div class="stat"><div class="n">{{ stats.apptRequested }}</div><div class="l">Citas solicitadas</div></div>
-          <div class="stat"><div class="n">{{ stats.apptConfirmed }}</div><div class="l">Confirmadas</div></div>
-          <div class="stat"><div class="n">{{ stats.visited }}</div><div class="l">Visitadas</div></div>
-          <div class="stat"><div class="n">{{ stats.favorites }}</div><div class="l">Favoritas</div></div>
-          <div class="stat"><div class="n">{{ stats.discarded }}</div><div class="l">Descartadas</div></div>
+          <button type="button" class="stat" @click="openHomeStat('total')"><div class="n">{{ stats.total }}</div><div class="l">Registradas</div></button>
+          <button type="button" class="stat" @click="openHomeStat('contactPending')"><div class="n">{{ stats.contactPending }}</div><div class="l">Por contactar</div></button>
+          <button type="button" class="stat" @click="openHomeStat('apptRequested')"><div class="n">{{ stats.apptRequested }}</div><div class="l">Citas solicitadas</div></button>
+          <button type="button" class="stat" @click="openHomeStat('apptConfirmed')"><div class="n">{{ stats.apptConfirmed }}</div><div class="l">Confirmadas</div></button>
+          <button type="button" class="stat" @click="openHomeStat('visited')"><div class="n">{{ stats.visited }}</div><div class="l">Visitadas</div></button>
+          <button type="button" class="stat" @click="openHomeStat('favorites')"><div class="n">{{ stats.favorites }}</div><div class="l">Favoritas</div></button>
+          <button type="button" class="stat" @click="openHomeStat('discarded')"><div class="n">{{ stats.discarded }}</div><div class="l">Descartadas</div></button>
         </div>
         <div class="quick-actions mb-16">
           <button class="quick-btn" @click="openQuickAdd"><i class="ph ph-plus-circle"></i>Nueva propiedad<span>Registro rápido</span></button>
@@ -104,6 +104,8 @@
           <input class="search-input" v-model="propFilter.q" placeholder="Buscar alias, colonia…" />
           <select class="select" v-model="propFilter.estado" style="width:auto">
             <option value="">Todos los estados</option>
+            <option value="__contact__">Por contactar</option>
+            <option value="__fav__">Favoritas</option>
             <option v-for="s in PROPERTY_STATES" :key="s" :value="s">{{ s }}</option>
           </select>
           <select class="select" v-model="propFilter.perros" style="width:auto">
@@ -720,8 +722,10 @@
       <div class="modal">
         <div class="modal-head"><h2>Pegar anuncio</h2><button class="icon-btn" @click="modals.pasteAd=false"><i class="ph ph-x"></i></button></div>
         <div class="modal-body">
-          <div class="field"><label>Texto del anuncio</label><textarea v-model="pasteText" rows="8" placeholder="Pega aquí la descripción…"></textarea></div>
-          <button class="btn btn-primary mt-12" :disabled="aiBusy || !pasteText.trim()" @click="extractAd">Extraer con IA</button>
+          <div class="field mb-8"><label>URL del anuncio</label><input v-model="pasteUrl" type="url" inputmode="url" placeholder="https://…" /></div>
+          <div class="field"><label>Texto del anuncio</label><textarea v-model="pasteText" rows="8" placeholder="Opcional si ya pegaste la URL. También puedes pegar aquí la descripción…"></textarea></div>
+          <p class="tiny muted mt-8">Puedes usar solo la URL, solo el texto, o ambos.</p>
+          <button class="btn btn-primary mt-12" :disabled="aiBusy || (!pasteText.trim() && !pasteUrl.trim())" @click="extractAd">{{ aiBusy ? 'Extrayendo…' : 'Extraer con IA' }}</button>
           <div v-if="extractForm" class="mt-16">
             <div class="alert info">Revisa los datos. Los campos vacíos quedaron pendientes (la IA no inventó valores).</div>
             <div class="grid-2">

@@ -496,6 +496,7 @@
         renta: null, enlace: "", registradoPor: "Brandon",
       });
       const pasteText = ref("");
+      const pasteUrl = ref("");
       const extractForm = ref(null);
       const discardForm = reactive({ propertyId: null, motivo: "decision", nota: "" });
       const apptForm = reactive(newAppt());
@@ -1033,7 +1034,13 @@
         const q = (propFilter.q || "").toLowerCase().trim();
         const pendiente = PERSONAS.includes(propFilter.pendienteVer) ? propFilter.pendienteVer : "";
         return data.properties.filter((p) => {
-          if (propFilter.estado && p.estado !== propFilter.estado) return false;
+          if (propFilter.estado === "__contact__") {
+            if (!["Por revisar", "Interesante", "Contacto pendiente"].includes(p.estado)) return false;
+          } else if (propFilter.estado === "__fav__") {
+            if (!(p.favorita || p.estado === "Favorita")) return false;
+          } else if (propFilter.estado && p.estado !== propFilter.estado) {
+            return false;
+          }
           if (propFilter.perros && p.perros?.acepta !== propFilter.perros) return false;
           if (propFilter.registradoPor && p.registradoPor !== propFilter.registradoPor) return false;
           if (pendiente && haVisto(p, pendiente)) return false;
@@ -1041,6 +1048,39 @@
           return true;
         });
       });
+
+      function clearPropFilters() {
+        propFilter.q = "";
+        propFilter.estado = "";
+        propFilter.perros = "";
+        propFilter.registradoPor = "";
+        propFilter.pendienteVer = "";
+      }
+
+      function openHomeStat(kind) {
+        if (kind === "apptRequested" || kind === "apptConfirmed") {
+          const match = (a) => kind === "apptRequested"
+            ? a.estado === "Solicitada"
+            : (a.estado === "Confirmada" || a.estado === "Reprogramada");
+          const next = [...data.appointments]
+            .filter((a) => a.estado !== "Cancelada" && match(a))
+            .sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora))[0];
+          view.value = "agenda";
+          agendaMode.value = "day";
+          if (next?.fecha) {
+            ensureAgendaDay(next.fecha);
+            agendaDay.value = next.fecha;
+          }
+          return;
+        }
+        clearPropFilters();
+        view.value = "properties";
+        if (kind === "total") return;
+        if (kind === "contactPending") propFilter.estado = "__contact__";
+        else if (kind === "visited") propFilter.estado = "Visitada";
+        else if (kind === "favorites") propFilter.estado = "__fav__";
+        else if (kind === "discarded") propFilter.estado = "Descartada";
+      }
       function addComentario(prop) {
         const texto = (commentForm.texto || "").trim();
         const autor = PERSONAS.includes(commentForm.autor) ? commentForm.autor : data.config.personaActiva;
@@ -4014,18 +4054,93 @@ Contexto:\n${buildContext()}`;
 
       function openPasteAd() {
         pasteText.value = "";
+        pasteUrl.value = "";
         extractForm.value = null;
         modals.pasteAd = true;
       }
+
+      function htmlToListingText(html) {
+        if (!html) return "";
+        const pick = (re) => {
+          const m = String(html).match(re);
+          return m?.[1] ? String(m[1]).replace(/\s+/g, " ").trim() : "";
+        };
+        const title = pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+          || pick(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+          || pick(/<title[^>]*>([^<]+)<\/title>/i);
+        const desc = pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i)
+          || pick(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i)
+          || pick(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
+        let body = String(html)
+          .replace(/<script[\s\S]*?<\/script>/gi, " ")
+          .replace(/<style[\s\S]*?<\/style>/gi, " ")
+          .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/&nbsp;/gi, " ")
+          .replace(/&amp;/gi, "&")
+          .replace(/&quot;/gi, '"')
+          .replace(/&#39;/gi, "'")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (body.length > 6000) body = body.slice(0, 6000);
+        return [title, desc, body].filter(Boolean).join("\n\n").trim();
+      }
+
+      async function fetchListingTextFromUrl(url) {
+        const raw = String(url || "").trim();
+        if (!/^https?:\/\//i.test(raw)) throw new Error("URL inválida (usa https://…)");
+
+        try {
+          const endpoint = "https://api.microlink.io/?url=" + encodeURIComponent(raw);
+          const res = await fetch(endpoint);
+          const json = await res.json().catch(() => ({}));
+          if (json.status === "success") {
+            const parts = [json.data?.title, json.data?.description].filter(Boolean).map(String);
+            if (parts.join(" ").trim().length > 30) return parts.join("\n\n");
+          }
+        } catch { /* try HTML proxy */ }
+
+        const proxies = [
+          (u) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u),
+          (u) => "https://corsproxy.io/?" + encodeURIComponent(u),
+        ];
+        let lastErr = "";
+        for (const make of proxies) {
+          try {
+            const res = await fetch(make(raw), { signal: AbortSignal.timeout?.(20000) });
+            if (!res.ok) { lastErr = "proxy " + res.status; continue; }
+            const text = htmlToListingText(await res.text());
+            if (text.length > 40) return text;
+            lastErr = "poco texto útil en la página";
+          } catch (e) {
+            lastErr = e.message || "proxy falló";
+          }
+        }
+        throw new Error(lastErr || "No se pudo leer el anuncio desde la URL");
+      }
+
       async function extractAd() {
+        const url = String(pasteUrl.value || "").trim();
+        let text = String(pasteText.value || "").trim();
+        if (!text && !url) {
+          toast("Pega el texto o el enlace del anuncio", "err");
+          return;
+        }
         aiBusy.value = true;
         try {
+          if (url && !text) {
+            toast("Leyendo el anuncio desde la URL…", "");
+            text = await fetchListingTextFromUrl(url);
+            if (!pasteText.value.trim()) pasteText.value = text.slice(0, 4000);
+          } else if (url && text) {
+            text = `${text}\n\nURL del anuncio: ${url}`;
+          }
           const content = await askAI([
             {
               role: "system",
               content: `Extrae datos de un anuncio inmobiliario de Monterrey. Responde SOLO un JSON válido con estas claves (usa null si no aparece en el texto; NUNCA inventes): alias, calle, numeroExt, numeroInt, colonia, municipio, estadoMx, cp, renta, mantenimiento, deposito, recamaras, banos, estacionamiento, m2Const, amueblado (sin|semi|full|pc), perros (si|no|pc), jardin (si|no|pc), terraza (si|no|pc), enlace, observaciones. Sin markdown.`,
             },
-            { role: "user", content: pasteText.value },
+            { role: "user", content: text },
           ]);
           const json = JSON.parse(content.replace(/```json|```/g, "").trim());
           extractForm.value = {
@@ -4044,7 +4159,7 @@ Contexto:\n${buildContext()}`;
             estacionamiento: json.estacionamiento ?? null,
             amueblado: json.amueblado || "pc",
             perros: json.perros || "pc",
-            enlace: json.enlace || "",
+            enlace: json.enlace || url || "",
             observaciones: json.observaciones || "",
             jardin: json.jardin || "pc",
             terraza: json.terraza || "pc",
@@ -4171,7 +4286,7 @@ Contexto:\n${buildContext()}`;
         PROPERTY_STATES, APPT_STATES, DIM_LABELS, AMENITY_KEYS, PLACE_CATS, PERSONAS,
         // state
         data, view, navItems, sync, conflict, toasts, backups, modals,
-        quickForm, pasteText, extractForm, discardForm, apptForm, advisorForm, commentForm,
+        quickForm, pasteText, pasteUrl, extractForm, discardForm, apptForm, advisorForm, commentForm,
         editingProp, propTab, propTabs, photoUrl, photoBusy, galleryAddOpen, lightbox, photoMode, uploadProgress,
         captureInputEl, uploadInputEl, newReqName, openReqs, manualTravel,
         propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
@@ -4185,7 +4300,7 @@ Contexto:\n${buildContext()}`;
         aiOpen, aiInput, aiMessages, aiBusy, aiSummarizing, pendingActions, aiMsgs,
         activeAiSummary, formatAiChatLabel,
         // computed
-        filteredProperties, eligibleProperties, discardedProperties, stats,
+        filteredProperties, eligibleProperties, discardedProperties, stats, openHomeStat, clearPropFilters,
         upcomingAppts, pendingConfirm, advisorFollowups, rankedProperties, top5,
         compareProps, weightsSum, dayAppts, dayConflicts, dayConflictIds, apptHasConflict,
         apptFormConflicts, apptFormConflictOthers, apptResolveOptions, apptResolveBusy,
