@@ -724,6 +724,27 @@ h4 {
   padding: 14px;
   background: var(--bg-elev);
 }
+.gap-8 { gap: 8px; }
+.photo-mode-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--accent-soft);
+}
+.photo-mode-text {
+  flex: 1;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.photo-mode-crop {
+  white-space: nowrap;
+}
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));

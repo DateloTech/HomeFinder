@@ -447,6 +447,17 @@
         </div>
 
         <div class="section">
+          <button class="section-h" @click="toggleSec('cloudinary')"><i class="ph ph-images"></i> Fotos (Cloudinary) <span class="grow"></span><i class="ph" :class="secs.cloudinary?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.cloudinary">
+            <p class="small muted mb-12">Crea una cuenta gratis en cloudinary.com. En Settings → Upload agrega un preset <strong>Unsigned</strong> (carpeta <code>homefinder</code>). Estos datos se sincronizan por Gist.</p>
+            <div class="field mb-8"><label>Cloud name</label><input v-model="data.config.cloudinaryCloud" @change="persist" placeholder="tu-cloud-name" spellcheck="false" /></div>
+            <div class="field mb-8"><label>Upload preset (unsigned)</label><input v-model="data.config.cloudinaryPreset" @change="persist" placeholder="homefinder_unsigned" spellcheck="false" /></div>
+            <p class="tiny muted" v-if="cloudinaryConfigured()">Cloudinary listo.</p>
+            <p class="tiny muted" v-else>Sin Cloudinary no se pueden subir capturas ni fotos del teléfono.</p>
+          </div>
+        </div>
+
+        <div class="section">
           <button class="section-h" @click="toggleSec('ai')"><i class="ph ph-robot"></i> OpenAI <span class="grow"></span><i class="ph" :class="secs.ai?'ph-caret-up':'ph-caret-down'"></i></button>
           <div class="section-b" v-show="secs.ai">
             <div class="field mb-8"><label>API Key</label><input type="password" v-model="data.config.openaiKey" @change="persist" /></div>
@@ -830,8 +841,16 @@
             <div class="gallery-section mt-16">
               <div class="row mb-8">
                 <h4 class="grow">Galería</h4>
+              </div>
+              <div class="row mb-8 gap-8">
+                <button class="btn btn-primary btn-sm" type="button" :disabled="!editingProp.enlace || photoBusy" @click="startPhotoMode(editingProp)">
+                  <i class="ph ph-camera"></i> Agregar fotos del anuncio
+                </button>
+                <button class="btn btn-sm" type="button" :disabled="photoBusy" @click="pickUploads">
+                  <i class="ph ph-upload-simple"></i> Subir fotos
+                </button>
                 <button class="btn btn-sm" type="button" :disabled="!editingProp.enlace || photoBusy" @click="fetchCoverForEditing(true)">
-                  <i class="ph ph-image"></i> {{ photoBusy ? 'Obteniendo…' : 'Traer foto del anuncio' }}
+                  <i class="ph ph-image"></i> {{ photoBusy && !uploadProgress.active ? 'Obteniendo…' : 'Traer foto del anuncio' }}
                 </button>
               </div>
               <div class="field mb-8"><label>Agregar URL de foto</label>
@@ -840,14 +859,14 @@
                   <button class="btn" type="button" @click="addPhotoUrl">Agregar</button>
                 </div>
               </div>
-              <div v-if="!editingProp.fotos?.length" class="muted small">Sin fotos. Pega el enlace del anuncio o agrega una URL.</div>
+              <div v-if="!editingProp.fotos?.length" class="muted small">Sin fotos. Usa capturas del anuncio, sube del teléfono o pega una URL.</div>
               <div class="gallery-grid" v-else>
                 <div class="gallery-item" v-for="(f,i) in editingProp.fotos" :key="f.id || i" :class="{cover: i===0}">
                   <button type="button" class="gallery-thumb" @click="openLightbox(editingProp, i)">
                     <img :src="f.thumb || f.url" alt="" />
                   </button>
                   <div class="gallery-meta">
-                    <span class="badge" :class="f.fuente==='anuncio'?'badge-accent':'badge-info'">{{ f.fuente === 'anuncio' ? 'anuncio' : 'manual' }}</span>
+                    <span class="badge" :class="fotoFuenteBadge(f.fuente)">{{ fotoFuenteLabel(f.fuente) }}</span>
                     <span class="badge badge-ok" v-if="i===0">portada</span>
                   </div>
                   <div class="gallery-actions">
@@ -857,6 +876,9 @@
                 </div>
               </div>
             </div>
+
+            <input ref="captureInputEl" class="sr-only" type="file" accept="image/*" multiple @change="onCaptureFilesSelected" />
+            <input ref="uploadInputEl" class="sr-only" type="file" accept="image/*" multiple @change="onUploadFilesSelected" />
 
             <div class="row mt-16">
               <button class="btn" v-if="advisorOf(editingProp)" @click="whatsappForProp(editingProp)"><i class="ph ph-whatsapp-logo"></i> WhatsApp</button>
@@ -1114,6 +1136,21 @@
             </div>
             <div v-if="!apptsOf(editingProp.id).length" class="muted small">Sin citas.</div>
           </template>
+        </div>
+
+        <div class="photo-mode-bar" v-if="photoMode.propertyId === editingProp.id">
+          <div class="photo-mode-text">
+            <strong>Modo fotos</strong>
+            <span class="small muted">Toma capturas del anuncio y elígelas aquí</span>
+            <span class="small" v-if="uploadProgress.active">{{ uploadProgress.label }}</span>
+          </div>
+          <label class="row small photo-mode-crop">
+            <input type="checkbox" v-model="photoMode.cropBars" /> Recortar barras
+          </label>
+          <button class="btn btn-primary" type="button" :disabled="uploadProgress.active" @click="pickCaptures">
+            <i class="ph ph-images"></i> Elegir capturas
+          </button>
+          <button class="btn btn-ghost" type="button" :disabled="uploadProgress.active" @click="endPhotoMode">Terminar</button>
         </div>
       </div>
     </div>

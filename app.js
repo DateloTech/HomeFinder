@@ -135,6 +135,8 @@
       openaiModel: "gpt-4o-mini",
       apiUsage: { geocoding: 0, routes: 0, places: 0 },
       personaActiva: "Brandon",
+      cloudinaryCloud: "",
+      cloudinaryPreset: "",
     };
   }
   function emptyData() {
@@ -159,6 +161,7 @@
       return emptyData();
     }
   }
+  const PHOTO_FUENTES = ["anuncio", "manual", "captura", "subida"];
   function normalizePhoto(f) {
     if (!f) return null;
     if (typeof f === "string") {
@@ -170,9 +173,18 @@
       id: f.id || uid(),
       url,
       thumb: f.thumb || url,
-      fuente: f.fuente === "anuncio" ? "anuncio" : "manual",
+      fuente: PHOTO_FUENTES.includes(f.fuente) ? f.fuente : "manual",
       addedAt: f.addedAt || new Date().toISOString(),
     };
+  }
+  function fotoFuenteLabel(fuente) {
+    return ({ anuncio: "anuncio", manual: "manual", captura: "captura", subida: "subida" })[fuente] || "manual";
+  }
+  function fotoFuenteBadge(fuente) {
+    if (fuente === "anuncio") return "badge-accent";
+    if (fuente === "captura") return "badge-warn";
+    if (fuente === "subida") return "badge-ok";
+    return "badge-info";
   }
   function normalizeProperty(p) {
     if (!p || typeof p !== "object") return p;
@@ -365,6 +377,13 @@
       const photoUrl = ref("");
       const photoBusy = ref(false);
       const lightbox = reactive({ open: false, propertyId: null, index: 0 });
+      const photoMode = reactive({
+        propertyId: null,
+        cropBars: true,
+      });
+      const uploadProgress = reactive({ active: false, current: 0, total: 0, label: "" });
+      const captureInputEl = ref(null);
+      const uploadInputEl = ref(null);
       const newReqName = ref("");
       const openReqs = reactive({});
       const manualTravel = reactive({ min: null, km: null });
@@ -378,7 +397,7 @@
       const rankOnlyEligible = ref(true);
       const compareIds = ref([]);
       const showCompare = ref(false);
-      const secs = reactive({ persona: true, dias: true, weights: false, sync: true, maps: false, ai: false, backup: false });
+      const secs = reactive({ persona: true, dias: true, weights: false, sync: true, maps: false, cloudinary: true, ai: false, backup: false });
       const propMapEl = ref(null);
       const propTabsEl = ref(null);
       const dayMapEl = ref(null);
@@ -908,7 +927,11 @@
         modals.property = true;
         nextTick(() => { if (propTab.value === "ubicacion") renderPropMap(); });
       }
-      function closeProperty() { modals.property = false; editingProp.value = null; }
+      function closeProperty() {
+        if (photoMode.propertyId && editingProp.value?.id === photoMode.propertyId) endPhotoMode();
+        modals.property = false;
+        editingProp.value = null;
+      }
       function saveEditingProp() {
         if (!editingProp.value) return;
         const idx = data.properties.findIndex((p) => p.id === editingProp.value.id);
@@ -1145,6 +1168,169 @@
         });
         photoUrl.value = "";
         saveEditingProp();
+      }
+
+      function cloudinaryConfigured() {
+        return !!(String(data.config.cloudinaryCloud || "").trim() && String(data.config.cloudinaryPreset || "").trim());
+      }
+
+      function requireCloudinary() {
+        if (cloudinaryConfigured()) return true;
+        toast("Configura Cloudinary en Ajustes → Fotos", "err");
+        view.value = "settings";
+        secs.cloudinary = true;
+        return false;
+      }
+
+      function cloudinaryThumb(secureUrl) {
+        if (!secureUrl || !String(secureUrl).includes("/upload/")) return secureUrl;
+        return String(secureUrl).replace("/upload/", "/upload/c_fill,w_480,h_360,q_auto,f_auto/");
+      }
+
+      function prepareImage(file, opts = {}) {
+        const crop = !!opts.crop;
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error("No se pudo leer la imagen"));
+          reader.onload = () => {
+            const img = new Image();
+            img.onerror = () => reject(new Error("Imagen inválida"));
+            img.onload = () => {
+              let sx = 0, sy = 0, sw = img.width, sh = img.height;
+              const ratio = sh / Math.max(sw, 1);
+              if (crop && ratio > 1.9) {
+                sy = Math.round(sh * 0.10);
+                const bottom = Math.round(sh * 0.08);
+                sh = Math.max(1, sh - sy - bottom);
+              }
+              const maxSide = 1600;
+              const scale = Math.min(1, maxSide / Math.max(sw, sh));
+              const cw = Math.max(1, Math.round(sw * scale));
+              const ch = Math.max(1, Math.round(sh * scale));
+              const canvas = document.createElement("canvas");
+              canvas.width = cw;
+              canvas.height = ch;
+              const ctx = canvas.getContext("2d");
+              ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
+              canvas.toBlob(
+                (blob) => {
+                  if (!blob) reject(new Error("No se pudo comprimir"));
+                  else resolve(blob);
+                },
+                "image/jpeg",
+                0.82
+              );
+            };
+            img.src = reader.result;
+          };
+          reader.readAsDataURL(file);
+        });
+      }
+
+      async function uploadToCloudinary(blob) {
+        const cloud = String(data.config.cloudinaryCloud || "").trim();
+        const preset = String(data.config.cloudinaryPreset || "").trim();
+        if (!cloud || !preset) throw new Error("Cloudinary no configurado");
+        const form = new FormData();
+        form.append("file", blob, "photo.jpg");
+        form.append("upload_preset", preset);
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(cloud)}/image/upload`, {
+          method: "POST",
+          body: form,
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error?.message || "Error al subir a Cloudinary (" + res.status + ")");
+        if (!json.secure_url) throw new Error("Cloudinary no devolvió URL");
+        return json.secure_url;
+      }
+
+      async function addFiles(prop, fileList, fuente, opts = {}) {
+        if (!prop || !fileList?.length) return;
+        if (!requireCloudinary()) return;
+        normalizeProperty(prop);
+        const files = Array.from(fileList).filter((f) => f && f.type && f.type.startsWith("image/"));
+        if (!files.length) {
+          toast("No se seleccionaron imágenes", "err");
+          return;
+        }
+        const crop = fuente === "captura" ? (opts.crop !== false && photoMode.cropBars) : false;
+        uploadProgress.active = true;
+        uploadProgress.current = 0;
+        uploadProgress.total = files.length;
+        uploadProgress.label = "Subiendo…";
+        photoBusy.value = true;
+        let ok = 0;
+        const errors = [];
+        try {
+          for (let i = 0; i < files.length; i++) {
+            uploadProgress.current = i + 1;
+            uploadProgress.label = `${i + 1} de ${files.length}`;
+            try {
+              const blob = await prepareImage(files[i], { crop });
+              const secureUrl = await uploadToCloudinary(blob);
+              prop.fotos.push({
+                id: uid(),
+                url: secureUrl,
+                thumb: cloudinaryThumb(secureUrl),
+                fuente: PHOTO_FUENTES.includes(fuente) ? fuente : "subida",
+                addedAt: new Date().toISOString(),
+              });
+              ok++;
+            } catch (e) {
+              errors.push((files[i].name || ("foto " + (i + 1))) + ": " + (e.message || "falló"));
+            }
+          }
+          if (ok) persist();
+          if (ok && !errors.length) toast(ok === 1 ? "1 foto agregada" : ok + " fotos agregadas", "ok");
+          else if (ok && errors.length) toast(`Se agregaron ${ok}. Fallaron ${errors.length}.`, "err");
+          else if (errors.length) toast(errors[0], "err");
+        } finally {
+          uploadProgress.active = false;
+          uploadProgress.current = 0;
+          uploadProgress.total = 0;
+          uploadProgress.label = "";
+          photoBusy.value = false;
+        }
+      }
+
+      function startPhotoMode(prop) {
+        if (!prop?.enlace) {
+          toast("Agrega el enlace del anuncio primero", "err");
+          return;
+        }
+        if (!requireCloudinary()) return;
+        photoMode.propertyId = prop.id;
+        window.open(prop.enlace, "_blank", "noopener");
+        toast("Toma capturas y vuelve aquí a Elegir capturas", "ok");
+      }
+
+      function endPhotoMode() {
+        photoMode.propertyId = null;
+      }
+
+      function pickCaptures() {
+        if (!photoMode.propertyId) return;
+        if (!requireCloudinary()) return;
+        captureInputEl.value?.click?.();
+      }
+
+      function pickUploads() {
+        if (!editingProp.value) return;
+        if (!requireCloudinary()) return;
+        uploadInputEl.value?.click?.();
+      }
+
+      function onCaptureFilesSelected(ev) {
+        const files = ev.target?.files;
+        const prop = propOf(photoMode.propertyId) || editingProp.value;
+        if (files?.length && prop) addFiles(prop, files, "captura", { crop: photoMode.cropBars });
+        if (ev.target) ev.target.value = "";
+      }
+
+      function onUploadFilesSelected(ev) {
+        const files = ev.target?.files;
+        if (files?.length && editingProp.value) addFiles(editingProp.value, files, "subida", { crop: false });
+        if (ev.target) ev.target.value = "";
       }
 
       function removePhoto(prop, id) {
@@ -2184,7 +2370,8 @@ Contexto:\n${buildContext()}`;
         // state
         data, view, navItems, sync, conflict, toasts, backups, modals,
         quickForm, pasteText, extractForm, discardForm, apptForm, advisorForm, commentForm,
-        editingProp, propTab, propTabs, photoUrl, photoBusy, lightbox, newReqName, openReqs, manualTravel,
+        editingProp, propTab, propTabs, photoUrl, photoBusy, lightbox, photoMode, uploadProgress,
+        captureInputEl, uploadInputEl, newReqName, openReqs, manualTravel,
         propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
         rankSort, rankOnlyEligible, compareIds, showCompare, secs,
         mapsReady, mapsBusy, propMapEl, propTabsEl, dayMapEl, overviewMapEl, showOverviewMap,
@@ -2199,6 +2386,8 @@ Contexto:\n${buildContext()}`;
         openQuickAdd, saveQuickAdd, openProperty, closeProperty, saveEditingProp, onPropTab,
         duplicateProp, deleteProp, changeEstado, confirmDiscard, onPerrosChange,
         setTri, setScore, addPhotoUrl, removePhoto, setCoverPhoto, onEnlaceChange, fetchCoverForEditing,
+        cloudinaryConfigured, startPhotoMode, endPhotoMode, pickCaptures, pickUploads,
+        onCaptureFilesSelected, onUploadFilesSelected, fotoFuenteLabel, fotoFuenteBadge,
         openLightbox, closeLightbox, lightboxPrev, lightboxNext, lightboxPhotos,
         addCustomReq, removeReq, reqProgress, toggleReqOpen, tabBadge, quickNewAdvisor,
         propOf, propName, advisorOf, advisorName, propsOfAdvisor, apptsOf,
