@@ -741,7 +741,7 @@
               <div class="field" style="grid-column:1/-1">
                 <label>Enlace</label>
                 <div class="row">
-                  <input class="grow" v-model="editingProp.enlace" @change="saveEditingProp" placeholder="https://…" />
+                  <input class="grow" v-model="editingProp.enlace" @change="onEnlaceChange" placeholder="https://…" />
                   <a v-if="editingProp.enlace" :href="editingProp.enlace" target="_blank" rel="noopener" class="btn btn-sm">Abrir</a>
                 </div>
               </div>
@@ -826,12 +826,38 @@
             </div>
 
             <div class="field mt-12"><label>Observaciones</label><textarea v-model="editingProp.observaciones" @change="saveEditingProp"></textarea></div>
-            <div class="field mt-12"><label>URL de foto</label>
-              <div class="row"><input class="grow" v-model="photoUrl" placeholder="https://…" /><button class="btn" @click="addPhotoUrl">Agregar</button></div>
+
+            <div class="gallery-section mt-16">
+              <div class="row mb-8">
+                <h4 class="grow">Galería</h4>
+                <button class="btn btn-sm" type="button" :disabled="!editingProp.enlace || photoBusy" @click="fetchCoverForEditing(true)">
+                  <i class="ph ph-image"></i> {{ photoBusy ? 'Obteniendo…' : 'Traer foto del anuncio' }}
+                </button>
+              </div>
+              <div class="field mb-8"><label>Agregar URL de foto</label>
+                <div class="row">
+                  <input class="grow" v-model="photoUrl" placeholder="https://…" @keydown.enter.exact.prevent="addPhotoUrl" />
+                  <button class="btn" type="button" @click="addPhotoUrl">Agregar</button>
+                </div>
+              </div>
+              <div v-if="!editingProp.fotos?.length" class="muted small">Sin fotos. Pega el enlace del anuncio o agrega una URL.</div>
+              <div class="gallery-grid" v-else>
+                <div class="gallery-item" v-for="(f,i) in editingProp.fotos" :key="f.id || i" :class="{cover: i===0}">
+                  <button type="button" class="gallery-thumb" @click="openLightbox(editingProp, i)">
+                    <img :src="f.thumb || f.url" alt="" />
+                  </button>
+                  <div class="gallery-meta">
+                    <span class="badge" :class="f.fuente==='anuncio'?'badge-accent':'badge-info'">{{ f.fuente === 'anuncio' ? 'anuncio' : 'manual' }}</span>
+                    <span class="badge badge-ok" v-if="i===0">portada</span>
+                  </div>
+                  <div class="gallery-actions">
+                    <button class="btn btn-sm" type="button" :disabled="i===0" @click="setCoverPhoto(editingProp, f.id)" title="Usar como portada">★</button>
+                    <button class="btn btn-sm btn-danger" type="button" @click="removePhoto(editingProp, f.id)" title="Eliminar">✕</button>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="row mt-8" v-if="editingProp.fotos?.length">
-              <img v-for="(f,i) in editingProp.fotos" :key="i" :src="f.thumb||f.url" style="width:64px;height:64px;object-fit:cover;border-radius:8px;cursor:pointer" @click="editingProp.fotos.splice(i,1); saveEditingProp()" title="Clic para quitar" />
-            </div>
+
             <div class="row mt-16">
               <button class="btn" v-if="advisorOf(editingProp)" @click="whatsappForProp(editingProp)"><i class="ph ph-whatsapp-logo"></i> WhatsApp</button>
               <button class="btn btn-danger" @click="deleteProp(editingProp.id)">Eliminar</button>
@@ -1090,6 +1116,15 @@
           </template>
         </div>
       </div>
+    </div>
+
+    <!-- Lightbox galería -->
+    <div class="lightbox" v-if="lightbox.open && lightboxPhotos().length" @click.self="closeLightbox" @keydown.esc="closeLightbox">
+      <button class="lightbox-close icon-btn" type="button" @click="closeLightbox"><i class="ph ph-x"></i></button>
+      <button class="lightbox-nav prev" type="button" @click="lightboxPrev" v-if="lightboxPhotos().length > 1"><i class="ph ph-caret-left"></i></button>
+      <img class="lightbox-img" :src="lightboxPhotos()[lightbox.index]?.url || lightboxPhotos()[lightbox.index]?.thumb" alt="" @click.stop />
+      <button class="lightbox-nav next" type="button" @click="lightboxNext" v-if="lightboxPhotos().length > 1"><i class="ph ph-caret-right"></i></button>
+      <div class="lightbox-counter">{{ lightbox.index + 1 }} / {{ lightboxPhotos().length }}</div>
     </div>
 
     <!-- Toasts -->

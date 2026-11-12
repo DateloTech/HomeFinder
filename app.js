@@ -159,6 +159,21 @@
       return emptyData();
     }
   }
+  function normalizePhoto(f) {
+    if (!f) return null;
+    if (typeof f === "string") {
+      return { id: uid(), url: f, thumb: f, fuente: "manual", addedAt: new Date().toISOString() };
+    }
+    const url = f.url || f.thumb || "";
+    if (!url) return null;
+    return {
+      id: f.id || uid(),
+      url,
+      thumb: f.thumb || url,
+      fuente: f.fuente === "anuncio" ? "anuncio" : "manual",
+      addedAt: f.addedAt || new Date().toISOString(),
+    };
+  }
   function normalizeProperty(p) {
     if (!p || typeof p !== "object") return p;
     if (!p.registradoPor) p.registradoPor = "";
@@ -166,6 +181,8 @@
     if (p.vistos.Atziri === undefined) p.vistos.Atziri = null;
     if (p.vistos.Brandon === undefined) p.vistos.Brandon = null;
     if (!Array.isArray(p.comentarios)) p.comentarios = [];
+    if (!Array.isArray(p.fotos)) p.fotos = [];
+    else p.fotos = p.fotos.map(normalizePhoto).filter(Boolean);
     return p;
   }
   function normalizeAdvisor(a) {
@@ -346,6 +363,8 @@
         { id: "eval", label: "Evaluación" }, { id: "citas", label: "Citas" },
       ];
       const photoUrl = ref("");
+      const photoBusy = ref(false);
+      const lightbox = reactive({ open: false, propertyId: null, index: 0 });
       const newReqName = ref("");
       const openReqs = reactive({});
       const manualTravel = reactive({ min: null, km: null });
@@ -860,6 +879,7 @@
         persist();
         modals.quickAdd = false;
         toast("Propiedad registrada", "ok");
+        if (p.enlace) applyCoverPhoto(p, { notify: true });
         openProperty(p.id);
       }
 
@@ -983,12 +1003,130 @@
         editingProp.value.evaluacion[kind].scores[key] = n;
         saveEditingProp();
       }
+      async function fetchCoverFromEnlace(url) {
+        const raw = String(url || "").trim();
+        if (!/^https?:\/\//i.test(raw)) return null;
+        const endpoint = "https://api.microlink.io/?url=" + encodeURIComponent(raw);
+        const res = await fetch(endpoint);
+        if (!res.ok) throw new Error("No se pudo leer el anuncio (" + res.status + ")");
+        const json = await res.json();
+        if (json.status !== "success") throw new Error(json.message || "Sin vista previa del enlace");
+        const img = json.data?.image;
+        const imgUrl = typeof img === "string" ? img : (img?.url || null);
+        if (!imgUrl) return null;
+        return { id: uid(), url: imgUrl, thumb: imgUrl, fuente: "anuncio", addedAt: new Date().toISOString() };
+      }
+
+      async function applyCoverPhoto(prop, opts = {}) {
+        const force = !!opts.force;
+        if (!prop?.enlace) {
+          if (force) toast("Agrega el enlace del anuncio primero", "err");
+          return false;
+        }
+        normalizeProperty(prop);
+        const hasAnuncio = (prop.fotos || []).some((f) => f.fuente === "anuncio");
+        if (hasAnuncio && !force && (prop.fotos || []).length) return false;
+        photoBusy.value = true;
+        try {
+          const cover = await fetchCoverFromEnlace(prop.enlace);
+          if (!cover) {
+            if (force) toast("No se encontró imagen en el anuncio", "err");
+            return false;
+          }
+          prop.fotos = prop.fotos || [];
+          const sameUrlIdx = prop.fotos.findIndex((f) => f.url === cover.url);
+          if (sameUrlIdx === 0) {
+            prop.fotos[0].fuente = "anuncio";
+            persist();
+            return true;
+          }
+          // Quitar portada de anuncio previa si se fuerza / actualizar
+          prop.fotos = prop.fotos.filter((f) => f.fuente !== "anuncio" && f.url !== cover.url);
+          prop.fotos.unshift(cover);
+          persist();
+          if (force || opts.notify) toast("Foto del anuncio agregada", "ok");
+          return true;
+        } catch (e) {
+          if (force || opts.notify) toast(e.message || "Error al obtener foto", "err");
+          return false;
+        } finally {
+          photoBusy.value = false;
+        }
+      }
+
+      function onEnlaceChange() {
+        saveEditingProp();
+        const p = editingProp.value;
+        if (!p?.enlace) return;
+        const hasAnuncio = (p.fotos || []).some((f) => f.fuente === "anuncio");
+        if (!hasAnuncio) applyCoverPhoto(p, { notify: true });
+      }
+
       function addPhotoUrl() {
-        if (!photoUrl.value.trim()) return;
-        editingProp.value.fotos = editingProp.value.fotos || [];
-        editingProp.value.fotos.push({ url: photoUrl.value.trim(), thumb: photoUrl.value.trim() });
+        if (!photoUrl.value.trim() || !editingProp.value) return;
+        normalizeProperty(editingProp.value);
+        const url = photoUrl.value.trim();
+        if ((editingProp.value.fotos || []).some((f) => f.url === url)) {
+          toast("Esa foto ya está en la galería", "err");
+          return;
+        }
+        editingProp.value.fotos.push({
+          id: uid(), url, thumb: url, fuente: "manual", addedAt: new Date().toISOString(),
+        });
         photoUrl.value = "";
         saveEditingProp();
+      }
+
+      function removePhoto(prop, id) {
+        if (!prop) return;
+        normalizeProperty(prop);
+        prop.fotos = prop.fotos.filter((f) => f.id !== id);
+        if (lightbox.open && lightbox.propertyId === prop.id) {
+          if (!prop.fotos.length) closeLightbox();
+          else lightbox.index = Math.min(lightbox.index, prop.fotos.length - 1);
+        }
+        persist();
+      }
+
+      function setCoverPhoto(prop, id) {
+        if (!prop) return;
+        normalizeProperty(prop);
+        const idx = prop.fotos.findIndex((f) => f.id === id);
+        if (idx <= 0) return;
+        const [foto] = prop.fotos.splice(idx, 1);
+        prop.fotos.unshift(foto);
+        persist();
+        toast("Portada actualizada", "ok");
+      }
+
+      function openLightbox(prop, index) {
+        if (!prop?.fotos?.length) return;
+        lightbox.open = true;
+        lightbox.propertyId = prop.id;
+        lightbox.index = index;
+      }
+      function closeLightbox() {
+        lightbox.open = false;
+        lightbox.propertyId = null;
+        lightbox.index = 0;
+      }
+      function lightboxPhotos() {
+        const p = propOf(lightbox.propertyId);
+        return p?.fotos || [];
+      }
+      function lightboxPrev() {
+        const n = lightboxPhotos().length;
+        if (!n) return;
+        lightbox.index = (lightbox.index - 1 + n) % n;
+      }
+      function lightboxNext() {
+        const n = lightboxPhotos().length;
+        if (!n) return;
+        lightbox.index = (lightbox.index + 1) % n;
+      }
+      function fetchCoverForEditing(force = true) {
+        if (!editingProp.value) return;
+        return applyCoverPhoto(editingProp.value, { force, notify: true });
       }
       function addCustomReq() {
         if (!newReqName.value.trim()) return;
@@ -1921,6 +2059,7 @@ Contexto:\n${buildContext()}`;
         persist();
         modals.pasteAd = false;
         toast("Propiedad creada desde anuncio", "ok");
+        if (p.enlace) applyCoverPhoto(p, { notify: true });
         openProperty(p.id);
       }
 
@@ -1975,7 +2114,7 @@ Contexto:\n${buildContext()}`;
         // state
         data, view, navItems, sync, conflict, toasts, backups, modals,
         quickForm, pasteText, extractForm, discardForm, apptForm, advisorForm, commentForm,
-        editingProp, propTab, propTabs, photoUrl, newReqName, openReqs, manualTravel,
+        editingProp, propTab, propTabs, photoUrl, photoBusy, lightbox, newReqName, openReqs, manualTravel,
         propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
         rankSort, rankOnlyEligible, compareIds, showCompare, secs,
         mapsReady, mapsBusy, propMapEl, propTabsEl, dayMapEl, overviewMapEl, showOverviewMap,
@@ -1989,7 +2128,9 @@ Contexto:\n${buildContext()}`;
         formatDay, formatDayShort, scoreEval, fmtScore, persist,
         openQuickAdd, saveQuickAdd, openProperty, closeProperty, saveEditingProp, onPropTab,
         duplicateProp, deleteProp, changeEstado, confirmDiscard, onPerrosChange,
-        setTri, setScore, addPhotoUrl, addCustomReq, removeReq, reqProgress, toggleReqOpen, tabBadge, quickNewAdvisor,
+        setTri, setScore, addPhotoUrl, removePhoto, setCoverPhoto, onEnlaceChange, fetchCoverForEditing,
+        openLightbox, closeLightbox, lightboxPrev, lightboxNext, lightboxPhotos,
+        addCustomReq, removeReq, reqProgress, toggleReqOpen, tabBadge, quickNewAdvisor,
         propOf, propName, advisorOf, advisorName, propsOfAdvisor, apptsOf,
         openAdvisorForm, saveAdvisor, deleteAdvisor, addAdvisorNote,
         otraPersona, haVisto, toggleVisto, marcarVistoYo, addComentario, removeComentario, formatCommentDate,
