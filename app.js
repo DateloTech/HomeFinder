@@ -366,6 +366,7 @@
       const discardForm = reactive({ propertyId: null, motivo: "decision", nota: "" });
       const apptForm = reactive(newAppt());
       const advisorForm = reactive(newAdvisor());
+      const advisorAssignTarget = ref(null); // "property" | "appt" | null
       const editingProp = ref(null);
       const propTab = ref("resumen");
       const propTabs = [
@@ -376,6 +377,7 @@
       ];
       const photoUrl = ref("");
       const photoBusy = ref(false);
+      const galleryAddOpen = ref(false);
       const lightbox = reactive({ open: false, propertyId: null, index: 0 });
       const photoMode = reactive({
         propertyId: null,
@@ -428,14 +430,12 @@
         if (data.config.gistId) data.config.gistId = String(data.config.gistId).trim();
       }
 
-      // Nunca subir secretos al Gist: GitHub los detecta y revoca el token automáticamente.
-      // personaActiva es por dispositivo; tampoco se sincroniza.
+      // githubToken NUNCA al Gist: GitHub lo detecta y lo revoca.
+      // personaActiva es por dispositivo. mapsKey y openaiKey sí viajan (riesgo aceptado).
       function toSyncPayload() {
         const payload = JSON.parse(JSON.stringify(data));
         if (payload.config) {
           payload.config.githubToken = "";
-          payload.config.mapsKey = "";
-          payload.config.openaiKey = "";
           payload.config.personaActiva = "";
         }
         return payload;
@@ -444,15 +444,11 @@
       function preserveLocalSecrets(applyFn) {
         const secrets = {
           githubToken: data.config.githubToken || "",
-          mapsKey: data.config.mapsKey || "",
-          openaiKey: data.config.openaiKey || "",
-          openaiModel: data.config.openaiModel || "gpt-4o-mini",
           personaActiva: PERSONAS.includes(data.config.personaActiva) ? data.config.personaActiva : "Brandon",
+          openaiModel: data.config.openaiModel || "gpt-4o-mini",
         };
         applyFn();
         data.config.githubToken = secrets.githubToken;
-        data.config.mapsKey = secrets.mapsKey;
-        data.config.openaiKey = secrets.openaiKey;
         data.config.personaActiva = secrets.personaActiva;
         if (!data.config.openaiModel) data.config.openaiModel = secrets.openaiModel;
       }
@@ -924,11 +920,13 @@
         commentForm.autor = data.config.personaActiva || "Brandon";
         commentForm.texto = "";
         Object.assign(manualTravel, { min: p.trasladoTrabajo?.min ?? null, km: p.trasladoTrabajo?.km ?? null });
+        galleryAddOpen.value = false;
         modals.property = true;
         nextTick(() => { if (propTab.value === "ubicacion") renderPropMap(); });
       }
       function closeProperty() {
         if (photoMode.propertyId && editingProp.value?.id === photoMode.propertyId) endPhotoMode();
+        galleryAddOpen.value = false;
         modals.property = false;
         editingProp.value = null;
       }
@@ -1293,6 +1291,20 @@
         }
       }
 
+      function toggleGalleryAdd() {
+        galleryAddOpen.value = !galleryAddOpen.value;
+      }
+
+      function chooseGalleryPhone() {
+        galleryAddOpen.value = false;
+        pickUploads();
+      }
+
+      function chooseGalleryListing() {
+        galleryAddOpen.value = false;
+        startPhotoMode(editingProp.value);
+      }
+
       function startPhotoMode(prop) {
         if (!prop?.enlace) {
           toast("Agrega el enlace del anuncio primero", "err");
@@ -1380,10 +1392,6 @@
         if (!n) return;
         lightbox.index = (lightbox.index + 1) % n;
       }
-      function fetchCoverForEditing(force = true) {
-        if (!editingProp.value) return;
-        return applyCoverPhoto(editingProp.value, { force, notify: true });
-      }
       function addCustomReq() {
         if (!newReqName.value.trim()) return;
         editingProp.value.requisitos.items.push({
@@ -1427,41 +1435,60 @@
         return "";
       }
       function quickNewAdvisor() {
-        const nombre = prompt("Nombre del asesor:");
-        if (!nombre || !nombre.trim()) return;
-        const whatsapp = prompt("WhatsApp o teléfono (opcional):") || "";
-        const ad = newAdvisor({ nombre: nombre.trim(), whatsapp: whatsapp.trim(), telefono: whatsapp.trim() });
-        data.advisors.push(ad);
-        if (editingProp.value) {
-          editingProp.value.advisorId = ad.id;
-          saveEditingProp();
-        } else persist();
-        toast("Asesor creado y asignado", "ok");
+        openAdvisorForm(null, "property");
       }
 
       /* ---------- Advisors ---------- */
-      function openAdvisorForm(ad) {
+      function openAdvisorForm(ad, assignTarget) {
+        advisorAssignTarget.value = assignTarget || null;
         const base = ad
           ? normalizeAdvisor(JSON.parse(JSON.stringify(ad)))
           : newAdvisor({ registradoPor: data.config.personaActiva || "Brandon" });
         Object.assign(advisorForm, base);
         modals.advisor = true;
       }
+      function closeAdvisorForm() {
+        modals.advisor = false;
+        advisorAssignTarget.value = null;
+      }
+      function applyAdvisorAssign(adId) {
+        const target = advisorAssignTarget.value;
+        advisorAssignTarget.value = null;
+        if (!adId || !target) return;
+        if (target === "property" && editingProp.value) {
+          editingProp.value.advisorId = adId;
+          saveEditingProp();
+          toast("Asesor creado y asignado", "ok");
+          return;
+        }
+        if (target === "appt") {
+          apptForm.advisorId = adId;
+          const p = propOf(apptForm.propertyId);
+          if (p && !p.advisorId) {
+            p.advisorId = adId;
+            if (editingProp.value?.id === p.id) editingProp.value.advisorId = adId;
+          }
+          persist();
+          toast("Asesor creado y asignado a la cita", "ok");
+        }
+      }
       function saveAdvisor() {
         if (!advisorForm.nombre.trim()) { toast("Nombre requerido", "err"); return; }
         const idx = data.advisors.findIndex((a) => a.id === advisorForm.id);
-        if (idx >= 0) data.advisors[idx] = JSON.parse(JSON.stringify(advisorForm));
-        else data.advisors.push(JSON.parse(JSON.stringify(advisorForm)));
+        const copy = JSON.parse(JSON.stringify(advisorForm));
+        if (idx >= 0) data.advisors[idx] = copy;
+        else data.advisors.push(copy);
         persist();
         modals.advisor = false;
-        toast("Asesor guardado", "ok");
+        if (advisorAssignTarget.value) applyAdvisorAssign(copy.id);
+        else toast("Asesor guardado", "ok");
       }
       function deleteAdvisor(id) {
         if (!confirm("¿Eliminar asesor?")) return;
         data.advisors = data.advisors.filter((a) => a.id !== id);
         data.properties.forEach((p) => { if (p.advisorId === id) p.advisorId = ""; });
         persist();
-        modals.advisor = false;
+        closeAdvisorForm();
       }
       function addAdvisorNote(ad) {
         const texto = prompt("Nota de conversación:");
@@ -1484,6 +1511,14 @@
           apptForm.advisorId = propOf(apptForm.propertyId)?.advisorId || "";
         }
         modals.appt = true;
+      }
+      function onApptPropertyChange() {
+        if (!apptForm.advisorId && apptForm.propertyId) {
+          apptForm.advisorId = propOf(apptForm.propertyId)?.advisorId || "";
+        }
+      }
+      function quickNewAdvisorForAppt() {
+        openAdvisorForm(null, "appt");
       }
       function saveAppt() {
         if (!apptForm.propertyId || !apptForm.fecha || !apptForm.hora) {
@@ -2343,7 +2378,7 @@ Contexto:\n${buildContext()}`;
           if (ev.key !== "Escape") return;
           if (modals.discard) { modals.discard = false; return; }
           if (modals.appt) { modals.appt = false; return; }
-          if (modals.advisor) { modals.advisor = false; return; }
+          if (modals.advisor) { closeAdvisorForm(); return; }
           if (modals.quickAdd) { modals.quickAdd = false; return; }
           if (modals.pasteAd) { modals.pasteAd = false; return; }
           if (showCompare.value) { showCompare.value = false; return; }
@@ -2370,7 +2405,7 @@ Contexto:\n${buildContext()}`;
         // state
         data, view, navItems, sync, conflict, toasts, backups, modals,
         quickForm, pasteText, extractForm, discardForm, apptForm, advisorForm, commentForm,
-        editingProp, propTab, propTabs, photoUrl, photoBusy, lightbox, photoMode, uploadProgress,
+        editingProp, propTab, propTabs, photoUrl, photoBusy, galleryAddOpen, lightbox, photoMode, uploadProgress,
         captureInputEl, uploadInputEl, newReqName, openReqs, manualTravel,
         propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
         rankSort, rankOnlyEligible, compareIds, showCompare, secs,
@@ -2385,15 +2420,17 @@ Contexto:\n${buildContext()}`;
         formatDay, formatDayShort, scoreEval, fmtScore, persist,
         openQuickAdd, saveQuickAdd, openProperty, closeProperty, saveEditingProp, onPropTab,
         duplicateProp, deleteProp, changeEstado, confirmDiscard, onPerrosChange,
-        setTri, setScore, addPhotoUrl, removePhoto, setCoverPhoto, onEnlaceChange, fetchCoverForEditing,
-        cloudinaryConfigured, startPhotoMode, endPhotoMode, pickCaptures, pickUploads,
+        setTri, setScore, addPhotoUrl, removePhoto, setCoverPhoto, onEnlaceChange,
+        cloudinaryConfigured, toggleGalleryAdd, chooseGalleryPhone, chooseGalleryListing,
+        startPhotoMode, endPhotoMode, pickCaptures, pickUploads,
         onCaptureFilesSelected, onUploadFilesSelected, fotoFuenteLabel, fotoFuenteBadge,
         openLightbox, closeLightbox, lightboxPrev, lightboxNext, lightboxPhotos,
         addCustomReq, removeReq, reqProgress, toggleReqOpen, tabBadge, quickNewAdvisor,
         propOf, propName, advisorOf, advisorName, propsOfAdvisor, apptsOf,
-        openAdvisorForm, saveAdvisor, deleteAdvisor, addAdvisorNote,
+        openAdvisorForm, closeAdvisorForm, saveAdvisor, deleteAdvisor, addAdvisorNote,
         otraPersona, haVisto, toggleVisto, marcarVistoYo, addComentario, removeComentario, formatCommentDate,
-        openApptForm, saveAppt, deleteAppt, apptClass, apptBadgeClass, estadoBadge, dayWindowLabel,
+        openApptForm, onApptPropertyChange, quickNewAdvisorForAppt, saveAppt, deleteAppt,
+        apptClass, apptBadgeClass, estadoBadge, dayWindowLabel,
         travelBetween, calcDayTravel, calcWorkTravel, saveManualTravel, geocodeProp,
         searchBasicPlaces, searchOnePlace, openInMaps, navigateTo, toggleOverviewMap, mapQuery,
         openWhatsApp, whatsappForProp, whatsappForAppt,
