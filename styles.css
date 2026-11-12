@@ -690,3 +690,30 @@ h4 {
   font-size: .78rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: .04em; color: var(--ink-muted);
 }
+
+.collab-box {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: var(--bg-tint, var(--bg-soft));
+}
+.visto-toggles {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.visto-toggle {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--bg-elev);
+  font-size: .9rem; font-weight: 600; cursor: pointer;
+}
+.visto-toggle.on {
+  border-color: var(--ok);
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.comment-list { display: flex; flex-direction: column; gap: 8px; }
+.comment-item {
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--line); background: var(--bg-elev);
+}
+.comment-item p { white-space: pre-wrap; word-break: break-word; }

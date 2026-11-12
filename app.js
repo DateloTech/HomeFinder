@@ -50,8 +50,13 @@
     { key: "plaza", label: "Plaza / centro comercial", type: "shopping_mall", basic: false },
     { key: "entretenimiento", label: "Entretenimiento", type: "movie_theater", basic: false },
   ];
+  const PERSONAS = ["Atziri", "Brandon"];
 
   const uid = () => crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+  function emptyVistos() {
+    return { Atziri: null, Brandon: null };
+  }
 
   function emptyScores() {
     return { precio: null, seguridad: null, cercania: null, calidad: null, servicios: null, entretenimiento: null };
@@ -81,6 +86,9 @@
       favorita: false,
       advisorId: "",
       zona: null,
+      registradoPor: "",
+      vistos: emptyVistos(),
+      comentarios: [],
       evaluacion: {
         pre: { scores: emptyScores(), ventajas: "", desventajas: "", notas: "" },
         post: { scores: emptyScores(), ventajas: "", desventajas: "", notas: "" },
@@ -93,6 +101,7 @@
     return {
       id: uid(), nombre: "", inmobiliaria: "", telefono: "", whatsapp: "",
       ultimoContacto: "", proximoSeguimiento: "", notas: "", bitacora: [],
+      registradoPor: "",
       ...partial,
     };
   }
@@ -125,6 +134,7 @@
       openaiKey: "",
       openaiModel: "gpt-4o-mini",
       apiUsage: { geocoding: 0, routes: 0, places: 0 },
+      personaActiva: "Brandon",
     };
   }
   function emptyData() {
@@ -149,14 +159,37 @@
       return emptyData();
     }
   }
+  function normalizeProperty(p) {
+    if (!p || typeof p !== "object") return p;
+    if (!p.registradoPor) p.registradoPor = "";
+    if (!p.vistos || typeof p.vistos !== "object") p.vistos = emptyVistos();
+    if (p.vistos.Atziri === undefined) p.vistos.Atziri = null;
+    if (p.vistos.Brandon === undefined) p.vistos.Brandon = null;
+    if (!Array.isArray(p.comentarios)) p.comentarios = [];
+    return p;
+  }
+  function normalizeAdvisor(a) {
+    if (!a || typeof a !== "object") return a;
+    if (!a.registradoPor) a.registradoPor = "";
+    return a;
+  }
   function migrate(d) {
     const base = emptyData();
+    const properties = (Array.isArray(d.properties) ? d.properties : []).map(normalizeProperty);
+    const advisors = (Array.isArray(d.advisors) ? d.advisors : []).map(normalizeAdvisor);
     return {
       ...base,
       ...d,
-      config: { ...base.config, ...(d.config || {}), ponderaciones: { ...base.config.ponderaciones, ...(d.config?.ponderaciones || {}) }, trabajo: { ...base.config.trabajo, ...(d.config?.trabajo || {}) }, apiUsage: { ...base.config.apiUsage, ...(d.config?.apiUsage || {}) } },
-      properties: Array.isArray(d.properties) ? d.properties : [],
-      advisors: Array.isArray(d.advisors) ? d.advisors : [],
+      config: {
+        ...base.config,
+        ...(d.config || {}),
+        ponderaciones: { ...base.config.ponderaciones, ...(d.config?.ponderaciones || {}) },
+        trabajo: { ...base.config.trabajo, ...(d.config?.trabajo || {}) },
+        apiUsage: { ...base.config.apiUsage, ...(d.config?.apiUsage || {}) },
+        personaActiva: PERSONAS.includes(d.config?.personaActiva) ? d.config.personaActiva : "Brandon",
+      },
+      properties,
+      advisors,
       appointments: Array.isArray(d.appointments) ? d.appointments : [],
     };
   }
@@ -298,7 +331,7 @@
       ];
 
       const modals = reactive({ quickAdd: false, pasteAd: false, discard: false, appt: false, advisor: false, property: false });
-      const quickForm = reactive({ alias: "", colonia: "", renta: null, enlace: "" });
+      const quickForm = reactive({ alias: "", colonia: "", renta: null, enlace: "", registradoPor: "Brandon" });
       const pasteText = ref("");
       const extractForm = ref(null);
       const discardForm = reactive({ propertyId: null, motivo: "decision", nota: "" });
@@ -316,7 +349,8 @@
       const newReqName = ref("");
       const openReqs = reactive({});
       const manualTravel = reactive({ min: null, km: null });
-      const propFilter = reactive({ q: "", estado: "", perros: "" });
+      const propFilter = reactive({ q: "", estado: "", perros: "", registradoPor: "", pendienteVer: false });
+      const commentForm = reactive({ autor: "Brandon", texto: "" });
       const agendaDay = ref(data.config.dias[0]?.fecha || "2026-11-21");
       const agendaMode = ref("day");
       const plannerResult = ref(null);
@@ -325,7 +359,7 @@
       const rankOnlyEligible = ref(true);
       const compareIds = ref([]);
       const showCompare = ref(false);
-      const secs = reactive({ dias: true, weights: false, sync: true, maps: false, ai: false, backup: false });
+      const secs = reactive({ persona: true, dias: true, weights: false, sync: true, maps: false, ai: false, backup: false });
       const propMapEl = ref(null);
       const propTabsEl = ref(null);
       const dayMapEl = ref(null);
@@ -357,12 +391,14 @@
       }
 
       // Nunca subir secretos al Gist: GitHub los detecta y revoca el token automáticamente.
+      // personaActiva es por dispositivo; tampoco se sincroniza.
       function toSyncPayload() {
         const payload = JSON.parse(JSON.stringify(data));
         if (payload.config) {
           payload.config.githubToken = "";
           payload.config.mapsKey = "";
           payload.config.openaiKey = "";
+          payload.config.personaActiva = "";
         }
         return payload;
       }
@@ -373,11 +409,13 @@
           mapsKey: data.config.mapsKey || "",
           openaiKey: data.config.openaiKey || "",
           openaiModel: data.config.openaiModel || "gpt-4o-mini",
+          personaActiva: PERSONAS.includes(data.config.personaActiva) ? data.config.personaActiva : "Brandon",
         };
         applyFn();
         data.config.githubToken = secrets.githubToken;
         data.config.mapsKey = secrets.mapsKey;
         data.config.openaiKey = secrets.openaiKey;
+        data.config.personaActiva = secrets.personaActiva;
         if (!data.config.openaiModel) data.config.openaiModel = secrets.openaiModel;
       }
 
@@ -665,13 +703,65 @@
       /* ---------- Computed ---------- */
       const filteredProperties = computed(() => {
         const q = (propFilter.q || "").toLowerCase().trim();
+        const yo = data.config.personaActiva || "Brandon";
         return data.properties.filter((p) => {
           if (propFilter.estado && p.estado !== propFilter.estado) return false;
           if (propFilter.perros && p.perros?.acepta !== propFilter.perros) return false;
+          if (propFilter.registradoPor && p.registradoPor !== propFilter.registradoPor) return false;
+          if (propFilter.pendienteVer && p.vistos?.[yo]) return false;
           if (q && !(p.alias || "").toLowerCase().includes(q) && !(p.colonia || "").toLowerCase().includes(q)) return false;
           return true;
         });
       });
+
+      function otraPersona(quien) {
+        const p = quien || data.config.personaActiva;
+        return p === "Atziri" ? "Brandon" : "Atziri";
+      }
+      function haVisto(prop, quien) {
+        return !!(prop?.vistos && prop.vistos[quien]);
+      }
+      function toggleVisto(prop, quien) {
+        if (!prop) return;
+        normalizeProperty(prop);
+        prop.vistos[quien] = prop.vistos[quien] ? null : new Date().toISOString();
+        persist();
+      }
+      function marcarVistoYo(prop) {
+        const yo = data.config.personaActiva || "Brandon";
+        if (!prop) return;
+        normalizeProperty(prop);
+        prop.vistos[yo] = new Date().toISOString();
+        persist();
+        toast(yo + " marcó como vista", "ok");
+      }
+      function addComentario(prop) {
+        const texto = (commentForm.texto || "").trim();
+        const autor = PERSONAS.includes(commentForm.autor) ? commentForm.autor : data.config.personaActiva;
+        if (!prop || !texto) { toast("Escribe un comentario", "err"); return; }
+        normalizeProperty(prop);
+        prop.comentarios.unshift({
+          id: uid(),
+          autor,
+          texto,
+          fecha: new Date().toISOString(),
+        });
+        commentForm.texto = "";
+        persist();
+        toast("Comentario publicado", "ok");
+      }
+      function removeComentario(prop, id) {
+        if (!prop || !confirm("¿Eliminar comentario?")) return;
+        normalizeProperty(prop);
+        prop.comentarios = prop.comentarios.filter((c) => c.id !== id);
+        persist();
+      }
+      function formatCommentDate(iso) {
+        if (!iso) return "";
+        try {
+          return new Date(iso).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+        } catch { return iso; }
+      }
       const eligibleProperties = computed(() => data.properties.filter((p) => p.estado !== "Descartada"));
       const discardedProperties = computed(() => data.properties.filter((p) => p.estado === "Descartada"));
 
@@ -750,13 +840,20 @@
       function propsOfAdvisor(id) { return data.properties.filter((p) => p.advisorId === id); }
       function apptsOf(pid) { return data.appointments.filter((a) => a.propertyId === pid).sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora)); }
 
-      function openQuickAdd() { Object.assign(quickForm, { alias: "", colonia: "", renta: null, enlace: "" }); modals.quickAdd = true; }
+      function openQuickAdd() {
+        Object.assign(quickForm, {
+          alias: "", colonia: "", renta: null, enlace: "",
+          registradoPor: data.config.personaActiva || "Brandon",
+        });
+        modals.quickAdd = true;
+      }
       function saveQuickAdd() {
         if (!quickForm.alias && !quickForm.colonia) { toast("Agrega al menos un alias o colonia", "err"); return; }
         const p = newProperty({
           alias: quickForm.alias || (quickForm.colonia ? "Casa " + quickForm.colonia : "Nueva propiedad"),
           colonia: quickForm.colonia,
           enlace: quickForm.enlace,
+          registradoPor: quickForm.registradoPor || data.config.personaActiva || "Brandon",
           costos: { ...newProperty().costos, renta: quickForm.renta },
         });
         data.properties.unshift(p);
@@ -782,8 +879,11 @@
         if (!p.evaluacion.post.scores) p.evaluacion.post.scores = emptyScores();
         if (!p.servicios) p.servicios = {};
         if (!p.travelCache) p.travelCache = {};
+        normalizeProperty(p);
         editingProp.value = p;
         propTab.value = "resumen";
+        commentForm.autor = data.config.personaActiva || "Brandon";
+        commentForm.texto = "";
         Object.assign(manualTravel, { min: p.trasladoTrabajo?.min ?? null, km: p.trasladoTrabajo?.km ?? null });
         modals.property = true;
         nextTick(() => { if (propTab.value === "ubicacion") renderPropMap(); });
@@ -947,7 +1047,10 @@
 
       /* ---------- Advisors ---------- */
       function openAdvisorForm(ad) {
-        Object.assign(advisorForm, ad ? JSON.parse(JSON.stringify(ad)) : newAdvisor());
+        const base = ad
+          ? normalizeAdvisor(JSON.parse(JSON.stringify(ad)))
+          : newAdvisor({ registradoPor: data.config.personaActiva || "Brandon" });
+        Object.assign(advisorForm, base);
         modals.advisor = true;
       }
       function saveAdvisor() {
@@ -1663,6 +1766,7 @@
       function buildContext() {
         const lines = [];
         lines.push(`Fecha actual del sistema: ${new Date().toISOString()}`);
+        lines.push(`Persona activa en este dispositivo: ${data.config.personaActiva || "Brandon"}`);
         lines.push(`Punto de trabajo: ${data.config.trabajo.nombre}`);
         lines.push(`Presupuesto: ${data.config.presupuesto ?? "no definido"}`);
         lines.push(`Días de visita: ${data.config.dias.map((d) => `${d.fecha} ${d.desde}-${d.hasta}`).join("; ")}`);
@@ -1670,11 +1774,12 @@
         for (const p of data.properties) {
           const pre = scoreEval(p, "pre", data.config.ponderaciones);
           const post = scoreEval(p, "post", data.config.ponderaciones);
-          lines.push(`- [${p.id}] ${p.alias} | colonia=${p.colonia} | estado=${p.estado} | renta=${p.costos?.renta} | totalMes=${totalMensual(p)} | amueblado=${p.amueblado} | perros=${p.perros?.acepta} | descarte=${p.descarte ? p.descarte.motivo : "no"} | alTec=${p.trasladoTrabajo?.min ?? "Sin dato"}min(${p.trasladoTrabajo?.fuente || ""}) | pre=${pre.score?.toFixed(2) ?? "Sin evaluar"}(${pre.pct}%) | post=${post.score?.toFixed(2) ?? "Sin evaluar"}(${post.pct}%) | jardin=${p.espacios?.jardin} | favorita=${p.favorita} | asesor=${advisorName(p.advisorId)}`);
+          const comentarios = (p.comentarios || []).slice(0, 3).map((c) => `${c.autor}: ${c.texto}`).join(" | ") || "ninguno";
+          lines.push(`- [${p.id}] ${p.alias} | colonia=${p.colonia} | estado=${p.estado} | registradoPor=${p.registradoPor || "?"} | vistoAtziri=${p.vistos?.Atziri ? "si" : "no"} | vistoBrandon=${p.vistos?.Brandon ? "si" : "no"} | renta=${p.costos?.renta} | totalMes=${totalMensual(p)} | amueblado=${p.amueblado} | perros=${p.perros?.acepta} | descarte=${p.descarte ? p.descarte.motivo : "no"} | alTec=${p.trasladoTrabajo?.min ?? "Sin dato"}min(${p.trasladoTrabajo?.fuente || ""}) | pre=${pre.score?.toFixed(2) ?? "Sin evaluar"}(${pre.pct}%) | post=${post.score?.toFixed(2) ?? "Sin evaluar"}(${post.pct}%) | jardin=${p.espacios?.jardin} | favorita=${p.favorita} | asesor=${advisorName(p.advisorId)} | comentarios=[${comentarios}]`);
         }
         lines.push("\nASESORES:");
         for (const a of data.advisors) {
-          lines.push(`- [${a.id}] ${a.nombre} | ${a.inmobiliaria} | wa=${a.whatsapp || a.telefono} | seguimiento=${a.proximoSeguimiento || "—"} | pendientes=${(a.bitacora || []).filter((b) => b.pendiente).length}`);
+          lines.push(`- [${a.id}] ${a.nombre} | ${a.inmobiliaria} | registradoPor=${a.registradoPor || "?"} | wa=${a.whatsapp || a.telefono} | seguimiento=${a.proximoSeguimiento || "—"} | pendientes=${(a.bitacora || []).filter((b) => b.pendiente).length}`);
         }
         lines.push("\nCITAS:");
         for (const a of data.appointments) {
@@ -1789,6 +1894,7 @@ Contexto:\n${buildContext()}`;
             terraza: json.terraza || "pc",
             deposito: json.deposito ?? null,
             m2Const: json.m2Const ?? null,
+            registradoPor: data.config.personaActiva || "Brandon",
           };
         } catch (e) {
           toast("No se pudo extraer: " + e.message, "err");
@@ -1801,6 +1907,7 @@ Contexto:\n${buildContext()}`;
           alias: f.alias || (f.colonia ? "Casa " + f.colonia : "Desde anuncio"),
           colonia: f.colonia, direccion: f.direccion, enlace: f.enlace, observaciones: f.observaciones,
           amueblado: f.amueblado,
+          registradoPor: f.registradoPor || data.config.personaActiva || "Brandon",
           costos: { ...newProperty().costos, renta: f.renta, mantenimiento: f.mantenimiento, deposito: f.deposito },
           fisicas: { ...newProperty().fisicas, recamaras: f.recamaras, banos: f.banos, estacionamiento: f.estacionamiento, m2Const: f.m2Const },
           espacios: { jardin: f.jardin || "pc", terraza: f.terraza || "pc", balcon: "pc" },
@@ -1864,10 +1971,10 @@ Contexto:\n${buildContext()}`;
 
       return {
         // const
-        PROPERTY_STATES, APPT_STATES, DIM_LABELS, AMENITY_KEYS, PLACE_CATS,
+        PROPERTY_STATES, APPT_STATES, DIM_LABELS, AMENITY_KEYS, PLACE_CATS, PERSONAS,
         // state
         data, view, navItems, sync, conflict, toasts, backups, modals,
-        quickForm, pasteText, extractForm, discardForm, apptForm, advisorForm,
+        quickForm, pasteText, extractForm, discardForm, apptForm, advisorForm, commentForm,
         editingProp, propTab, propTabs, photoUrl, newReqName, openReqs, manualTravel,
         propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
         rankSort, rankOnlyEligible, compareIds, showCompare, secs,
@@ -1885,6 +1992,7 @@ Contexto:\n${buildContext()}`;
         setTri, setScore, addPhotoUrl, addCustomReq, removeReq, reqProgress, toggleReqOpen, tabBadge, quickNewAdvisor,
         propOf, propName, advisorOf, advisorName, propsOfAdvisor, apptsOf,
         openAdvisorForm, saveAdvisor, deleteAdvisor, addAdvisorNote,
+        otraPersona, haVisto, toggleVisto, marcarVistoYo, addComentario, removeComentario, formatCommentDate,
         openApptForm, saveAppt, deleteAppt, apptClass, apptBadgeClass, estadoBadge, dayWindowLabel,
         travelBetween, calcDayTravel, calcWorkTravel, saveManualTravel, geocodeProp,
         searchBasicPlaces, searchOnePlace, openInMaps, navigateTo, toggleOverviewMap, mapQuery,

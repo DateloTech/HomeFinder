@@ -112,6 +112,11 @@
             <option value="pc">Por confirmar</option>
             <option value="no">No acepta</option>
           </select>
+          <select class="select" v-model="propFilter.registradoPor" style="width:auto">
+            <option value="">Registrado por</option>
+            <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
+          </select>
+          <label class="row small"><input type="checkbox" v-model="propFilter.pendienteVer" /> Pendiente de que yo vea</label>
           <button class="btn btn-sm" :class="showOverviewMap?'btn-primary':''" @click="toggleOverviewMap">Mapa</button>
         </div>
         <div v-show="showOverviewMap" class="map-box tall mb-12" ref="overviewMapEl"></div>
@@ -138,6 +143,10 @@
               </div>
               <div class="prop-badges">
                 <span class="badge" :class="estadoBadge(p.estado)">{{ p.estado }}</span>
+                <span class="badge badge-accent" v-if="p.registradoPor">Reg: {{ p.registradoPor }}</span>
+                <span class="badge" :class="haVisto(p,'Atziri')?'badge-ok':'badge-warn'">{{ haVisto(p,'Atziri') ? 'Atziri vio' : 'Atziri no ha visto' }}</span>
+                <span class="badge" :class="haVisto(p,'Brandon')?'badge-ok':'badge-warn'">{{ haVisto(p,'Brandon') ? 'Brandon vio' : 'Brandon no ha visto' }}</span>
+                <span class="badge badge-info" v-if="p.comentarios?.length">{{ p.comentarios.length }} com.</span>
                 <span class="badge" :class="p.perros?.acepta==='si'?'badge-ok':p.perros?.acepta==='no'?'badge-danger':'badge-warn'">
                   {{ p.perros?.acepta==='si'?'Perros OK':p.perros?.acepta==='no'?'No perros':'Perros ?' }}
                 </span>
@@ -334,6 +343,7 @@
               <button class="icon-btn" @click="openAdvisorForm(ad)"><i class="ph ph-pencil-simple"></i></button>
             </div>
             <p class="small muted">{{ ad.inmobiliaria || 'Sin inmobiliaria' }}</p>
+            <span class="badge badge-accent mt-8" v-if="ad.registradoPor">Reg: {{ ad.registradoPor }}</span>
             <p class="small mt-8">{{ propsOfAdvisor(ad.id).length }} propiedades</p>
             <p class="small muted" v-if="ad.proximoSeguimiento">Seguimiento: {{ ad.proximoSeguimiento }}</p>
             <div class="chip-list mt-8 mb-8">
@@ -356,6 +366,19 @@
       <!-- SETTINGS -->
       <section v-if="view==='settings'">
         <div class="page-head"><h1>Configuración</h1></div>
+
+        <div class="section">
+          <button class="section-h" @click="toggleSec('persona')"><i class="ph ph-user"></i> Quién usa este dispositivo <span class="grow"></span><i class="ph" :class="secs.persona?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.persona">
+            <p class="small muted mb-12">Se usa para preseleccionar “Registrado por”, “Ya la vi” y el autor de comentarios. No se sincroniza entre dispositivos.</p>
+            <div class="field">
+              <label>Esta sesión es</label>
+              <select v-model="data.config.personaActiva" @change="persist">
+                <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
+              </select>
+            </div>
+          </div>
+        </div>
 
         <div class="section">
           <button class="section-h" @click="toggleSec('dias')"><i class="ph ph-calendar"></i> Días de visita <span class="grow"></span><i class="ph" :class="secs.dias?'ph-caret-up':'ph-caret-down'"></i></button>
@@ -494,7 +517,12 @@
           <div class="field mb-8"><label>Alias / nombre</label><input v-model="quickForm.alias" placeholder="Casa Cumbres 3 rec" autofocus /></div>
           <div class="field mb-8"><label>Colonia</label><input v-model="quickForm.colonia" /></div>
           <div class="field mb-8"><label>Renta mensual</label><input type="number" v-model.number="quickForm.renta" /></div>
-          <div class="field"><label>Enlace del anuncio</label><input v-model="quickForm.enlace" placeholder="https://…" /></div>
+          <div class="field mb-8"><label>Enlace del anuncio</label><input v-model="quickForm.enlace" placeholder="https://…" /></div>
+          <div class="field"><label>Registrado por</label>
+            <select v-model="quickForm.registradoPor">
+              <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
+            </select>
+          </div>
         </div>
         <div class="modal-foot">
           <button class="btn btn-ghost" @click="modals.quickAdd=false">Cancelar</button>
@@ -535,6 +563,11 @@
                   <option value="pc">Por confirmar</option>
                   <option value="si">Sí</option>
                   <option value="no">No</option>
+                </select>
+              </div>
+              <div class="field"><label>Registrado por</label>
+                <select v-model="extractForm.registradoPor">
+                  <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
                 </select>
               </div>
             </div>
@@ -631,6 +664,12 @@
         <div class="modal-body">
           <div class="field mb-8"><label>Nombre</label><input v-model="advisorForm.nombre" /></div>
           <div class="field mb-8"><label>Inmobiliaria</label><input v-model="advisorForm.inmobiliaria" /></div>
+          <div class="field mb-8"><label>Registrado por</label>
+            <select v-model="advisorForm.registradoPor">
+              <option value="">Sin indicar</option>
+              <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
+            </select>
+          </div>
           <div class="grid-2">
             <div class="field"><label>Teléfono</label><input v-model="advisorForm.telefono" /></div>
             <div class="field"><label>WhatsApp</label><input v-model="advisorForm.whatsapp" placeholder="52…" /></div>
@@ -735,10 +774,57 @@
                   <option :value="true">Sí</option>
                 </select>
               </div>
+              <div class="field"><label>Registrado por</label>
+                <select v-model="editingProp.registradoPor" @change="saveEditingProp">
+                  <option value="">Sin indicar</option>
+                  <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
+                </select>
+              </div>
             </div>
             <div class="alert ok mt-12" v-if="editingProp.amueblado==='sin'">Preferencia de amueblado: compatible.</div>
             <div class="alert mt-12" v-else>Menor compatibilidad: preferencia es sin amueblar.</div>
             <div class="alert danger mt-12" v-if="editingProp.descarte">Descartada · {{ descarteLabel(editingProp.descarte.motivo) }} · {{ editingProp.descarte.nota || '' }}</div>
+
+            <div class="collab-box mt-16">
+              <div class="row mb-8">
+                <h4 class="grow">Colaboración Atziri / Brandon</h4>
+                <button class="btn btn-sm btn-primary" type="button" @click="marcarVistoYo(editingProp)">Ya la vi ({{ data.config.personaActiva }})</button>
+              </div>
+              <div class="visto-toggles">
+                <label class="visto-toggle" :class="{on: haVisto(editingProp,'Atziri')}">
+                  <input type="checkbox" :checked="haVisto(editingProp,'Atziri')" @change="toggleVisto(editingProp,'Atziri')" />
+                  Atziri ya la vio
+                  <span class="tiny faint" v-if="editingProp.vistos?.Atziri">{{ formatCommentDate(editingProp.vistos.Atziri) }}</span>
+                </label>
+                <label class="visto-toggle" :class="{on: haVisto(editingProp,'Brandon')}">
+                  <input type="checkbox" :checked="haVisto(editingProp,'Brandon')" @change="toggleVisto(editingProp,'Brandon')" />
+                  Brandon ya la vio
+                  <span class="tiny faint" v-if="editingProp.vistos?.Brandon">{{ formatCommentDate(editingProp.vistos.Brandon) }}</span>
+                </label>
+              </div>
+              <h4 class="mt-16 mb-8">Comentarios</h4>
+              <div v-if="!editingProp.comentarios?.length" class="muted small mb-8">Sin comentarios aún.</div>
+              <div class="comment-list mb-12">
+                <div class="comment-item" v-for="c in editingProp.comentarios" :key="c.id">
+                  <div class="row">
+                    <strong class="grow">{{ c.autor }}</strong>
+                    <span class="tiny faint">{{ formatCommentDate(c.fecha) }}</span>
+                    <button class="icon-btn" type="button" title="Eliminar" @click="removeComentario(editingProp, c.id)"><i class="ph ph-trash"></i></button>
+                  </div>
+                  <p class="small mt-4">{{ c.texto }}</p>
+                </div>
+              </div>
+              <div class="grid-2">
+                <div class="field"><label>Quién comenta</label>
+                  <select v-model="commentForm.autor">
+                    <option v-for="per in PERSONAS" :key="per" :value="per">{{ per }}</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field mt-8"><label>Comentario</label><textarea v-model="commentForm.texto" rows="3" placeholder="Notas para la contraparte…"></textarea></div>
+              <button class="btn btn-primary mt-8" type="button" @click="addComentario(editingProp)">Publicar comentario</button>
+            </div>
+
             <div class="field mt-12"><label>Observaciones</label><textarea v-model="editingProp.observaciones" @change="saveEditingProp"></textarea></div>
             <div class="field mt-12"><label>URL de foto</label>
               <div class="row"><input class="grow" v-model="photoUrl" placeholder="https://…" /><button class="btn" @click="addPhotoUrl">Agregar</button></div>
