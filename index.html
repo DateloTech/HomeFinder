@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f766e" />
+  <title>HomeFinder Monterrey</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="brand">Home<span>Finder</span></div>
+      <nav class="nav-desktop">
+        <button v-for="n in navItems" :key="n.id" class="nav-btn" :class="{active: view===n.id}" @click="view=n.id">{{ n.label }}</button>
+      </nav>
+      <div class="topbar-actions">
+        <div class="sync-pill" :class="sync.level" :title="sync.detail || sync.label" @click="retrySync">
+          <span class="sync-dot"></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sync.label }}</span>
+        </div>
+        <button class="icon-btn" title="Configuración" @click="view='settings'"><i class="ph ph-gear"></i></button>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- DASHBOARD -->
+      <section v-if="view==='home'">
+        <div class="page-head"><h1>Inicio</h1></div>
+        <div class="stat-grid mb-16">
+          <div class="stat"><div class="n">{{ stats.total }}</div><div class="l">Registradas</div></div>
+          <div class="stat"><div class="n">{{ stats.contactPending }}</div><div class="l">Por contactar</div></div>
+          <div class="stat"><div class="n">{{ stats.apptRequested }}</div><div class="l">Citas solicitadas</div></div>
+          <div class="stat"><div class="n">{{ stats.apptConfirmed }}</div><div class="l">Confirmadas</div></div>
+          <div class="stat"><div class="n">{{ stats.visited }}</div><div class="l">Visitadas</div></div>
+          <div class="stat"><div class="n">{{ stats.favorites }}</div><div class="l">Favoritas</div></div>
+          <div class="stat"><div class="n">{{ stats.discarded }}</div><div class="l">Descartadas</div></div>
+        </div>
+        <div class="quick-actions mb-16">
+          <button class="quick-btn" @click="openQuickAdd"><i class="ph ph-plus-circle"></i>Nueva propiedad<span>Registro rápido</span></button>
+          <button class="quick-btn" @click="openPasteAd"><i class="ph ph-clipboard-text"></i>Pegar anuncio<span>Extracción con IA</span></button>
+          <button class="quick-btn" @click="openApptForm()"><i class="ph ph-calendar-plus"></i>Nueva cita<span>Agendar visita</span></button>
+          <button class="quick-btn" @click="view='agenda'; agendaMode='planner'"><i class="ph ph-path"></i>Planificar día<span>Optimizar recorridos</span></button>
+        </div>
+        <div class="grid-2 gap-16">
+          <div class="card">
+            <h3 class="mb-12">Próximas citas</h3>
+            <div v-if="!upcomingAppts.length" class="muted small">Sin citas próximas.</div>
+            <div v-for="a in upcomingAppts" :key="a.id" class="list-item" style="padding:8px 0;cursor:pointer" @click="openProperty(a.propertyId)">
+              <div class="grow">
+                <div class="row"><strong>{{ a.hora }}</strong> <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span></div>
+                <div class="small">{{ propName(a.propertyId) }} · {{ formatDay(a.fecha) }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <h3 class="mb-12">Confirmaciones pendientes</h3>
+            <div v-if="!pendingConfirm.length" class="muted small">Todo al día.</div>
+            <div v-for="a in pendingConfirm" :key="a.id" class="list-item" style="padding:8px 0">
+              <div class="grow">
+                <div><strong>{{ propName(a.propertyId) }}</strong></div>
+                <div class="small muted">{{ formatDay(a.fecha) }} · {{ a.hora }} · {{ a.estado }}</div>
+              </div>
+              <button class="btn btn-sm" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i></button>
+            </div>
+          </div>
+        </div>
+        <div class="card mt-16">
+          <div class="row mb-12"><h3 class="grow">Top 5</h3><button class="btn btn-sm btn-ghost" @click="view='ranking'">Ver ranking</button></div>
+          <div v-if="!top5.length" class="muted small">Evalúa propiedades para ver el ranking.</div>
+          <div v-for="(p,i) in top5" :key="p.id" class="list-item" style="cursor:pointer" @click="openProperty(p.id)">
+            <strong style="width:24px">{{ i+1 }}</strong>
+            <div class="grow">
+              <div>{{ p.alias }} <span class="badge" v-if="p._scoreKind">{{ p._scoreKind }}</span></div>
+              <div class="small muted">{{ p.colonia }} · {{ money(totalMensual(p)) }}/mes</div>
+            </div>
+            <div class="badge badge-accent">{{ p._score?.toFixed(2) || '—' }}</div>
+          </div>
+        </div>
+        <div class="card mt-16" v-if="advisorFollowups.length">
+          <h3 class="mb-12">Seguimientos de asesores</h3>
+          <div v-for="ad in advisorFollowups" :key="ad.id" class="list-item">
+            <div class="grow">
+              <strong>{{ ad.nombre }}</strong>
+              <div class="small muted">Próximo: {{ ad.proximoSeguimiento || '—' }}</div>
+            </div>
+            <button class="btn btn-sm" @click="openWhatsApp(ad.whatsapp || ad.telefono)"><i class="ph ph-whatsapp-logo"></i></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- PROPERTIES -->
+      <section v-if="view==='properties'">
+        <div class="page-head">
+          <h1>Propiedades</h1>
+          <button class="btn btn-primary" @click="openQuickAdd"><i class="ph ph-plus"></i> Nueva</button>
+        </div>
+        <div class="filter-bar">
+          <input class="search-input" v-model="propFilter.q" placeholder="Buscar alias, colonia…" />
+          <select class="select" v-model="propFilter.estado" style="width:auto">
+            <option value="">Todos los estados</option>
+            <option v-for="s in PROPERTY_STATES" :key="s" :value="s">{{ s }}</option>
+          </select>
+          <select class="select" v-model="propFilter.perros" style="width:auto">
+            <option value="">Mascotas</option>
+            <option value="si">Acepta perros</option>
+            <option value="pc">Por confirmar</option>
+            <option value="no">No acepta</option>
+          </select>
+          <button class="btn btn-sm" :class="showOverviewMap?'btn-primary':''" @click="toggleOverviewMap">Mapa</button>
+        </div>
+        <div v-show="showOverviewMap" class="map-box tall mb-12" ref="overviewMapEl"></div>
+        <div v-if="!filteredProperties.length" class="empty"><i class="ph ph-house"></i><p>Sin propiedades. Registra la primera.</p></div>
+        <div class="prop-grid">
+          <article v-for="p in filteredProperties" :key="p.id" class="prop-card" :class="{discarded: p.estado==='Descartada'}" @click="openProperty(p.id)">
+            <div class="prop-thumb">
+              <img v-if="p.fotos?.[0]?.thumb || p.fotos?.[0]?.url" :src="p.fotos[0].thumb || p.fotos[0].url" alt="" />
+              <i v-else class="ph ph-house-line" style="font-size:2rem"></i>
+              <button class="fav-toggle" :class="{on: p.favorita}" type="button" title="Favorita" @click.stop="p.favorita=!p.favorita; persist()">★</button>
+            </div>
+            <div class="prop-body">
+              <div class="row">
+                <div class="prop-title grow">{{ p.alias || 'Sin nombre' }}</div>
+                <a v-if="p.enlace" :href="p.enlace" target="_blank" rel="noopener" class="icon-btn" title="Abrir anuncio" @click.stop><i class="ph ph-arrow-square-out"></i></a>
+              </div>
+              <div class="prop-meta">{{ p.colonia || 'Sin colonia' }}</div>
+              <div class="prop-price">{{ money(totalMensual(p)) }}/mes</div>
+              <div class="prop-specs" v-if="p.fisicas?.recamaras || p.fisicas?.banos || p.trasladoTrabajo?.min != null">
+                <span v-if="p.fisicas?.recamaras">{{ p.fisicas.recamaras }} rec</span>
+                <span v-if="p.fisicas?.banos">{{ p.fisicas.banos }} baños</span>
+                <span v-if="p.fisicas?.estacionamiento">{{ p.fisicas.estacionamiento }} est</span>
+                <span v-if="p.trasladoTrabajo?.min != null">🚗 {{ p.trasladoTrabajo.min }} min al Tec</span>
+              </div>
+              <div class="prop-badges">
+                <span class="badge" :class="estadoBadge(p.estado)">{{ p.estado }}</span>
+                <span class="badge" :class="p.perros?.acepta==='si'?'badge-ok':p.perros?.acepta==='no'?'badge-danger':'badge-warn'">
+                  {{ p.perros?.acepta==='si'?'Perros OK':p.perros?.acepta==='no'?'No perros':'Perros ?' }}
+                </span>
+                <span class="badge" :class="p.amueblado==='sin'?'badge-ok':'badge-warn'">{{ amuebladoLabel(p.amueblado) }}</span>
+                <span v-if="p.descarte" class="badge badge-danger">{{ descarteLabel(p.descarte.motivo) }}</span>
+              </div>
+              <div class="prop-actions" @click.stop>
+                <select class="select" style="flex:1;padding:6px 8px;font-size:.8rem" :value="p.estado" @change="changeEstado(p, $event.target.value)">
+                  <option v-for="s in PROPERTY_STATES" :key="s" :value="s">{{ s }}</option>
+                </select>
+                <button class="btn btn-sm" v-if="advisorOf(p)" @click="whatsappForProp(p)" title="WhatsApp"><i class="ph ph-whatsapp-logo"></i></button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <!-- AGENDA -->
+      <section v-if="view==='agenda'">
+        <div class="page-head">
+          <h1>Agenda</h1>
+          <div class="row">
+            <button class="btn btn-sm" :class="agendaMode==='day'?'btn-primary':''" @click="agendaMode='day'">Día</button>
+            <button class="btn btn-sm" :class="agendaMode==='itinerary'?'btn-primary':''" @click="agendaMode='itinerary'">Itinerario</button>
+            <button class="btn btn-sm" :class="agendaMode==='planner'?'btn-primary':''" @click="agendaMode='planner'">Planificar</button>
+            <button class="btn btn-primary" @click="openApptForm()"><i class="ph ph-plus"></i></button>
+          </div>
+        </div>
+        <div class="day-tabs">
+          <button v-for="d in data.config.dias" :key="d.fecha" class="day-tab" :class="{active: agendaDay===d.fecha}" @click="agendaDay=d.fecha">
+            {{ formatDayShort(d.fecha) }}
+          </button>
+        </div>
+
+        <template v-if="agendaMode==='day'">
+          <div class="row mb-12">
+            <span class="small muted grow">{{ dayWindowLabel(agendaDay) }}</span>
+            <button class="btn btn-sm" @click="calcDayTravel(agendaDay)" :disabled="!mapsReady || mapsBusy">
+              <i class="ph ph-path"></i> Calcular traslados del día
+            </button>
+          </div>
+          <div v-if="dayConflicts.length" class="alert danger mb-12">Conflictos de horario: {{ dayConflicts.map(c=>c).join('; ') }}</div>
+          <div class="map-box mb-12" ref="dayMapEl"></div>
+          <div class="timeline" v-if="dayAppts.length">
+            <div v-for="a in dayAppts" :key="a.id" class="appt" :class="apptClass(a)" @click="openApptForm(a)">
+              <div>
+                <div class="appt-time">{{ a.hora }}</div>
+                <div class="appt-dur">{{ a.duracion || 45 }} min</div>
+              </div>
+              <div>
+                <div class="row"><strong>{{ propName(a.propertyId) }}</strong> <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span></div>
+                <div class="small muted">{{ propOf(a.propertyId)?.colonia }} · {{ advisorName(a.advisorId || propOf(a.propertyId)?.advisorId) }}</div>
+                <div class="row mt-8" @click.stop>
+                  <button class="btn btn-sm" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i></button>
+                  <button class="btn btn-sm" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i></button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="empty"><i class="ph ph-calendar-blank"></i><p>Sin citas este día.</p></div>
+        </template>
+
+        <template v-if="agendaMode==='itinerary'">
+          <div v-if="!dayAppts.length" class="empty"><i class="ph ph-map-trifold"></i><p>Sin itinerario para este día.</p></div>
+          <div v-for="(a, idx) in dayAppts" :key="a.id">
+            <div class="itinerary-item">
+              <div class="row mb-8"><strong>{{ a.hora }}</strong> <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span></div>
+              <h3>{{ propName(a.propertyId) }}</h3>
+              <p class="small muted">{{ propOf(a.propertyId)?.direccion || '' }} · {{ propOf(a.propertyId)?.colonia }}</p>
+              <p class="small mt-8">Asesor: {{ advisorName(a.advisorId || propOf(a.propertyId)?.advisorId) }}</p>
+              <p v-if="a.notas" class="small mt-8">{{ a.notas }}</p>
+              <div class="row mt-12">
+                <button class="btn btn-sm" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i> WhatsApp</button>
+                <button class="btn btn-sm btn-primary" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i> Navegar</button>
+              </div>
+            </div>
+            <div v-if="idx < dayAppts.length-1" class="travel-note" :class="{missing: !travelBetween(a, dayAppts[idx+1])}">
+              <template v-if="travelBetween(a, dayAppts[idx+1])">
+                Traslado a siguiente: {{ travelBetween(a, dayAppts[idx+1]).min }} min
+                <span class="faint">({{ travelBetween(a, dayAppts[idx+1]).fuente }})</span>
+              </template>
+              <template v-else>Sin dato de traslado — calcula rutas o captura el tiempo a mano.</template>
+            </div>
+          </div>
+        </template>
+
+        <template v-if="agendaMode==='planner'">
+          <div class="card mb-12">
+            <p class="small muted mb-12">El planificador respeta citas confirmadas (fijas) y solicitadas (semifijas). Solo propone horarios para citas libres o nuevas.</p>
+            <div class="row">
+              <button class="btn btn-primary" @click="runPlanner" :disabled="plannerBusy">Generar propuesta</button>
+              <button class="btn" @click="calcDayTravel(agendaDay)" :disabled="!mapsReady || mapsBusy">Calcular traslados</button>
+            </div>
+          </div>
+          <div v-if="plannerResult">
+            <div v-if="plannerResult.warnings.length" class="alert mb-12">
+              <div v-for="(w,i) in plannerResult.warnings" :key="i">{{ w }}</div>
+            </div>
+            <div v-if="plannerResult.suggestions.length" class="alert info mb-12">
+              <div v-for="(s,i) in plannerResult.suggestions" :key="i" class="mb-8">
+                {{ s.text }}
+                <button class="btn btn-sm mt-8" v-if="s.whatsapp" @click="openWhatsApp(s.whatsapp, s.message)">Pedir cambio por WhatsApp</button>
+              </div>
+            </div>
+            <div class="timeline mb-12">
+              <div v-for="slot in plannerResult.slots" :key="slot.key" class="appt" :class="slot.kind">
+                <div><div class="appt-time">{{ slot.hora }}</div><div class="appt-dur">{{ slot.duracion }} min</div></div>
+                <div>
+                  <div class="row"><strong>{{ slot.alias }}</strong> <span class="badge">{{ slot.label }}</span></div>
+                  <div class="small muted">{{ slot.colonia }} · zona {{ slot.zona || '—' }}</div>
+                  <div v-if="slot.travelMissing" class="tiny badge badge-warn mt-8">Traslado sin dato</div>
+                </div>
+              </div>
+            </div>
+            <div class="row" v-if="plannerResult.changes.length">
+              <button class="btn btn-primary" @click="applyPlanner">Aplicar propuesta</button>
+              <button class="btn btn-ghost" @click="plannerResult=null">Descartar</button>
+            </div>
+            <p v-else class="muted small">Sin cambios que aplicar.</p>
+          </div>
+        </template>
+      </section>
+
+      <!-- RANKING -->
+      <section v-if="view==='ranking'">
+        <div class="page-head">
+          <h1>Ranking</h1>
+          <button class="btn" :disabled="compareIds.length<2" @click="showCompare=true">Comparar ({{ compareIds.length }})</button>
+        </div>
+        <div class="filter-bar">
+          <select class="select" v-model="rankSort" style="width:auto">
+            <option value="auto">Orden: automático (pre/post)</option>
+            <option value="pre">Solo preliminar</option>
+            <option value="post">Solo presencial</option>
+            <option value="precio">Precio mensual</option>
+            <option value="trabajo">Tiempo al trabajo</option>
+            <option value="colonia">Colonia</option>
+          </select>
+          <label class="row small"><input type="checkbox" v-model="rankOnlyEligible" /> Solo elegibles</label>
+        </div>
+        <div class="table-wrap card" style="padding:0">
+          <table class="rank">
+            <thead>
+              <tr>
+                <th></th><th>#</th><th>Propiedad</th><th>Colonia</th><th>Total/mes</th>
+                <th>Prelim.</th><th>Presenc.</th><th>Al Tec</th><th>Compat.</th><th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(p,i) in rankedProperties" :key="p.id" class="clickable" @click="openProperty(p.id)">
+                <td @click.stop><input type="checkbox" :checked="compareIds.includes(p.id)" @change="toggleCompare(p.id)" :disabled="!compareIds.includes(p.id) && compareIds.length>=3" /></td>
+                <td>{{ i+1 }}</td>
+                <td>
+                  <strong>{{ p.alias }}</strong>
+                  <span class="badge" v-if="p._scoreKind">{{ p._scoreKind }}</span>
+                </td>
+                <td>{{ p.colonia || '—' }}</td>
+                <td>{{ money(totalMensual(p)) }}</td>
+                <td>{{ fmtScore(p._pre) }} <span class="faint">({{ p._prePct }}%)</span></td>
+                <td>{{ fmtScore(p._post) }} <span class="faint">({{ p._postPct }}%)</span></td>
+                <td>{{ p.trasladoTrabajo?.min != null ? p.trasladoTrabajo.min+' min' : 'Sin dato' }}</td>
+                <td>
+                  <span class="badge" :class="p.perros?.acepta==='si'?'badge-ok':p.perros?.acepta==='no'?'badge-danger':'badge-warn'">🐕</span>
+                  <span class="badge" :class="p.amueblado==='sin'?'badge-ok':'badge-warn'">{{ amuebladoLabel(p.amueblado) }}</span>
+                </td>
+                <td><span class="badge" :class="estadoBadge(p.estado)">{{ p.estado }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="mt-16" v-if="discardedProperties.length">
+          <h3 class="mb-8">Descartadas</h3>
+          <div class="card" v-for="p in discardedProperties" :key="p.id" style="margin-bottom:8px;cursor:pointer" @click="openProperty(p.id)">
+            <div class="row">
+              <strong class="grow">{{ p.alias }}</strong>
+              <span class="badge badge-danger">{{ descarteLabel(p.descarte?.motivo) }}</span>
+            </div>
+            <div class="small muted">{{ p.colonia }} · {{ p.descarte?.nota || '' }}</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ADVISORS -->
+      <section v-if="view==='advisors'">
+        <div class="page-head">
+          <h1>Asesores</h1>
+          <button class="btn btn-primary" @click="openAdvisorForm()"><i class="ph ph-plus"></i> Nuevo</button>
+        </div>
+        <div v-if="!data.advisors.length" class="empty"><i class="ph ph-users"></i><p>Sin asesores registrados.</p></div>
+        <div class="prop-grid">
+          <div class="card" v-for="ad in data.advisors" :key="ad.id">
+            <div class="row mb-8">
+              <h3 class="grow">{{ ad.nombre }}</h3>
+              <button class="icon-btn" @click="openAdvisorForm(ad)"><i class="ph ph-pencil-simple"></i></button>
+            </div>
+            <p class="small muted">{{ ad.inmobiliaria || 'Sin inmobiliaria' }}</p>
+            <p class="small mt-8">{{ propsOfAdvisor(ad.id).length }} propiedades</p>
+            <p class="small muted" v-if="ad.proximoSeguimiento">Seguimiento: {{ ad.proximoSeguimiento }}</p>
+            <div class="chip-list mt-8 mb-8">
+              <span class="chip" v-for="p in propsOfAdvisor(ad.id)" :key="p.id" @click="openProperty(p.id)">{{ p.alias }}</span>
+            </div>
+            <div class="row">
+              <button class="btn btn-sm btn-ok" @click="openWhatsApp(ad.whatsapp || ad.telefono)"><i class="ph ph-whatsapp-logo"></i> WhatsApp</button>
+              <button class="btn btn-sm" @click="addAdvisorNote(ad)">Nota</button>
+            </div>
+            <div v-if="ad.bitacora?.length" class="mt-12">
+              <div v-for="(n,i) in ad.bitacora.slice(0,3)" :key="i" class="small" style="padding:4px 0;border-bottom:1px solid var(--line)">
+                <span class="faint">{{ n.fecha }}</span> {{ n.texto }}
+                <span v-if="n.pendiente" class="badge badge-warn">pendiente</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section v-if="view==='settings'">
+        <div class="page-head"><h1>Configuración</h1></div>
+
+        <div class="section">
+          <button class="section-h" @click="toggleSec('dias')"><i class="ph ph-calendar"></i> Días de visita <span class="grow"></span><i class="ph" :class="secs.dias?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.dias">
+            <div v-for="(d,i) in data.config.dias" :key="d.fecha" class="card-soft mb-8" style="padding:10px">
+              <div class="grid-2">
+                <div class="field"><label>Fecha</label><input type="date" v-model="d.fecha" @change="persist" /></div>
+                <div class="field"><label>Etiqueta</label><input v-model="d.label" @change="persist" /></div>
+                <div class="field"><label>Desde</label><input type="time" v-model="d.desde" @change="persist" /></div>
+                <div class="field"><label>Hasta</label><input type="time" v-model="d.hasta" @change="persist" /></div>
+              </div>
+              <button class="btn btn-sm btn-danger mt-8" @click="data.config.dias.splice(i,1); persist()">Eliminar día</button>
+            </div>
+            <button class="btn" @click="addVisitDay">Agregar día</button>
+            <div class="grid-2 mt-12">
+              <div class="field"><label>Duración cita (min)</label><input type="number" v-model.number="data.config.duracionDefault" @change="persist" /></div>
+              <div class="field"><label>Margen entre citas (min)</label><input type="number" v-model.number="data.config.margen" @change="persist" /></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <button class="section-h" @click="toggleSec('weights')"><i class="ph ph-sliders"></i> Ponderaciones <span class="grow"></span><i class="ph" :class="secs.weights?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.weights">
+            <div class="alert" v-if="weightsSum!==100">Deben sumar 100%. Actual: {{ weightsSum }}%</div>
+            <div class="field mb-8" v-for="(w,key) in data.config.ponderaciones" :key="key">
+              <label>{{ DIM_LABELS[key] }}</label>
+              <input type="number" v-model.number="data.config.ponderaciones[key]" min="0" max="100" @change="persist" />
+            </div>
+            <div class="field"><label>Presupuesto mensual (opcional)</label><input type="number" v-model.number="data.config.presupuesto" @change="persist" /></div>
+          </div>
+        </div>
+
+        <div class="section">
+          <button class="section-h" @click="toggleSec('sync')"><i class="ph ph-cloud"></i> Sincronización (Gist) <span class="grow"></span><i class="ph" :class="secs.sync?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.sync">
+            <p class="small muted mb-12">Crea un Personal Access Token de GitHub con permiso <code>gist</code>. La app crea o usa un Gist privado.</p>
+            <div class="field mb-8"><label>GitHub token</label><input type="password" v-model="data.config.githubToken" @change="persist" placeholder="ghp_…" /></div>
+            <div class="field mb-8"><label>Gist ID (se crea solo si está vacío)</label><input v-model="data.config.gistId" @change="persist" /></div>
+            <div class="row">
+              <button class="btn" @click="forcePull">Forzar descarga</button>
+              <button class="btn" @click="forcePush">Forzar subida</button>
+              <button class="btn btn-primary" @click="retrySync">Reintentar sync</button>
+            </div>
+            <p class="tiny muted mt-8">{{ sync.detail }}</p>
+          </div>
+        </div>
+
+        <div class="section">
+          <button class="section-h" @click="toggleSec('maps')"><i class="ph ph-map-pin"></i> Google Maps <span class="grow"></span><i class="ph" :class="secs.maps?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.maps">
+            <div class="field mb-8"><label>API Key</label><input type="password" v-model="data.config.mapsKey" @change="onMapsKeyChange" /></div>
+            <p class="small muted">Habilita: Maps JavaScript, Geocoding, Routes y Places. Restringe por dominio.</p>
+            <div class="kv mt-12">
+              <dt>Llamadas Geocoding</dt><dd>{{ data.config.apiUsage?.geocoding || 0 }}</dd>
+              <dt>Llamadas Routes</dt><dd>{{ data.config.apiUsage?.routes || 0 }}</dd>
+              <dt>Llamadas Places</dt><dd>{{ data.config.apiUsage?.places || 0 }}</dd>
+            </div>
+            <div class="field mt-12"><label>Punto de trabajo</label><input v-model="data.config.trabajo.nombre" @change="persist" /></div>
+            <div class="grid-2">
+              <div class="field"><label>Lat</label><input type="number" step="any" v-model.number="data.config.trabajo.lat" @change="persist" /></div>
+              <div class="field"><label>Lng</label><input type="number" step="any" v-model.number="data.config.trabajo.lng" @change="persist" /></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <button class="section-h" @click="toggleSec('ai')"><i class="ph ph-robot"></i> OpenAI <span class="grow"></span><i class="ph" :class="secs.ai?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.ai">
+            <div class="field mb-8"><label>API Key</label><input type="password" v-model="data.config.openaiKey" @change="persist" /></div>
+            <div class="field"><label>Modelo</label><input v-model="data.config.openaiModel" @change="persist" placeholder="gpt-4o-mini" /></div>
+          </div>
+        </div>
+
+        <div class="section">
+          <button class="section-h" @click="toggleSec('backup')"><i class="ph ph-download-simple"></i> Respaldos <span class="grow"></span><i class="ph" :class="secs.backup?'ph-caret-up':'ph-caret-down'"></i></button>
+          <div class="section-b" v-show="secs.backup">
+            <div class="row mb-12">
+              <button class="btn btn-primary" @click="exportBackup">Exportar JSON</button>
+              <label class="btn">Importar JSON<input type="file" accept="application/json" class="sr-only" @change="importBackup" /></label>
+            </div>
+            <h4 class="mb-8">Automáticos recientes</h4>
+            <div v-if="!backups.length" class="muted small">Sin respaldos automáticos.</div>
+            <div v-for="(b,i) in backups" :key="i" class="row mb-8">
+              <span class="small grow">{{ b.label }} · {{ b.at }}</span>
+              <button class="btn btn-sm" @click="restoreBackup(i)">Restaurar</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom nav -->
+    <nav class="bottom-nav">
+      <button v-for="n in navItems" :key="n.id" :class="{active: view===n.id}" @click="view=n.id">
+        <i class="ph" :class="n.icon"></i>{{ n.label }}
+      </button>
+    </nav>
+
+    <!-- AI FAB -->
+    <button class="ai-fab" @click="aiOpen=true" title="Asistente IA"><i class="ph ph-robot"></i></button>
+
+    <!-- AI Panel -->
+    <div class="overlay" v-if="aiOpen" @click.self="aiOpen=false" style="justify-content:flex-end;align-items:stretch;background:rgba(0,0,0,.25)">
+      <aside class="ai-panel" @click.stop>
+        <div class="modal-head">
+          <h2>Asistente</h2>
+          <button class="icon-btn" @click="aiOpen=false"><i class="ph ph-x"></i></button>
+        </div>
+        <div class="ai-messages" ref="aiMsgs">
+          <div v-for="(m,i) in aiMessages" :key="i" class="msg" :class="m.role">{{ m.content }}</div>
+          <div v-if="pendingActions.length" class="action-card">
+            <strong>Acciones propuestas</strong>
+            <ul class="mt-8">
+              <li v-for="(a,i) in pendingActions" :key="i" class="small">{{ a.descripcion || a.type }}</li>
+            </ul>
+            <div class="row mt-8">
+              <button class="btn btn-sm btn-primary" @click="applyAIActions">Aplicar</button>
+              <button class="btn btn-sm btn-ghost" @click="pendingActions=[]">Descartar</button>
+            </div>
+          </div>
+        </div>
+        <div class="ai-input-bar">
+          <textarea v-model="aiInput" rows="2" placeholder="Pregunta sobre tus propiedades, citas…" @keydown.enter.exact.prevent="sendAI"></textarea>
+          <button class="btn btn-primary" :disabled="aiBusy || !aiInput.trim()" @click="sendAI"><i class="ph ph-paper-plane-tilt"></i></button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Quick add -->
+    <div class="overlay center" v-if="modals.quickAdd" @click.self="modals.quickAdd=false">
+      <div class="modal" style="max-width:480px">
+        <div class="modal-head"><h2>Registro rápido</h2><button class="icon-btn" @click="modals.quickAdd=false"><i class="ph ph-x"></i></button></div>
+        <div class="modal-body" @keydown.enter.exact.prevent="saveQuickAdd">
+          <div class="field mb-8"><label>Alias / nombre</label><input v-model="quickForm.alias" placeholder="Casa Cumbres 3 rec" autofocus /></div>
+          <div class="field mb-8"><label>Colonia</label><input v-model="quickForm.colonia" /></div>
+          <div class="field mb-8"><label>Renta mensual</label><input type="number" v-model.number="quickForm.renta" /></div>
+          <div class="field"><label>Enlace del anuncio</label><input v-model="quickForm.enlace" placeholder="https://…" /></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" @click="modals.quickAdd=false">Cancelar</button>
+          <button class="btn btn-primary" @click="saveQuickAdd">Guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Paste ad -->
+    <div class="overlay center" v-if="modals.pasteAd" @click.self="modals.pasteAd=false">
+      <div class="modal">
+        <div class="modal-head"><h2>Pegar anuncio</h2><button class="icon-btn" @click="modals.pasteAd=false"><i class="ph ph-x"></i></button></div>
+        <div class="modal-body">
+          <div class="field"><label>Texto del anuncio</label><textarea v-model="pasteText" rows="8" placeholder="Pega aquí la descripción…"></textarea></div>
+          <button class="btn btn-primary mt-12" :disabled="aiBusy || !pasteText.trim()" @click="extractAd">Extraer con IA</button>
+          <div v-if="extractForm" class="mt-16">
+            <div class="alert info">Revisa los datos. Los campos vacíos quedaron pendientes (la IA no inventó valores).</div>
+            <div class="grid-2">
+              <div class="field"><label>Alias</label><input v-model="extractForm.alias" :class="{warn: !extractForm.alias}" /></div>
+              <div class="field"><label>Colonia</label><input v-model="extractForm.colonia" /></div>
+              <div class="field"><label>Renta</label><input type="number" v-model.number="extractForm.renta" /></div>
+              <div class="field"><label>Mantenimiento</label><input type="number" v-model.number="extractForm.mantenimiento" /></div>
+              <div class="field"><label>Recámaras</label><input type="number" v-model.number="extractForm.recamaras" /></div>
+              <div class="field"><label>Baños</label><input type="number" v-model.number="extractForm.banos" /></div>
+              <div class="field"><label>Estacionamiento</label><input type="number" v-model.number="extractForm.estacionamiento" /></div>
+              <div class="field"><label>Amueblado</label>
+                <select v-model="extractForm.amueblado">
+                  <option value="pc">Por confirmar</option>
+                  <option value="sin">Sin amueblar</option>
+                  <option value="semi">Semiamueblada</option>
+                  <option value="full">Amueblada</option>
+                </select>
+              </div>
+              <div class="field" style="grid-column:1/-1"><label>Dirección</label><input v-model="extractForm.direccion" /></div>
+              <div class="field" style="grid-column:1/-1"><label>Enlace</label><input v-model="extractForm.enlace" /></div>
+              <div class="field"><label>Acepta perros</label>
+                <select v-model="extractForm.perros">
+                  <option value="pc">Por confirmar</option>
+                  <option value="si">Sí</option>
+                  <option value="no">No</option>
+                </select>
+              </div>
+            </div>
+            <div class="field mt-8"><label>Notas / observaciones</label><textarea v-model="extractForm.observaciones"></textarea></div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" @click="modals.pasteAd=false">Cancelar</button>
+          <button class="btn btn-primary" :disabled="!extractForm" @click="saveExtracted">Confirmar y guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Discard reason -->
+    <div class="overlay center" v-if="modals.discard" @click.self="modals.discard=false">
+      <div class="modal" style="max-width:420px">
+        <div class="modal-head"><h2>Descartar propiedad</h2><button class="icon-btn" @click="modals.discard=false"><i class="ph ph-x"></i></button></div>
+        <div class="modal-body">
+          <div class="field mb-8"><label>Motivo</label>
+            <select v-model="discardForm.motivo">
+              <option value="mascotas">No acepta mascotas</option>
+              <option value="precio">Precio</option>
+              <option value="ubicacion">Ubicación</option>
+              <option value="decision">Decisión personal</option>
+              <option value="otro">Otro</option>
+            </select>
+          </div>
+          <div class="field"><label>Nota (opcional)</label><textarea v-model="discardForm.nota"></textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" @click="modals.discard=false">Cancelar</button>
+          <button class="btn btn-danger" @click="confirmDiscard">Descartar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Conflict dialog -->
+    <div class="overlay center" v-if="conflict" @click.self>
+      <div class="modal" style="max-width:520px">
+        <div class="modal-head"><h2>Conflicto de sincronización</h2></div>
+        <div class="modal-body">
+          <p class="mb-12">Hay cambios en este dispositivo y en el Gist. Elige cuál conservar. La otra versión se guarda como respaldo automático.</p>
+          <div class="grid-2">
+            <div class="card-soft">
+              <strong>Local</strong>
+              <p class="small muted mt-8">{{ conflict.localMeta }}</p>
+              <button class="btn btn-primary btn-block mt-12" @click="resolveConflict('local')">Usar local</button>
+            </div>
+            <div class="card-soft">
+              <strong>Remoto</strong>
+              <p class="small muted mt-8">{{ conflict.remoteMeta }}</p>
+              <button class="btn btn-block mt-12" @click="resolveConflict('remote')">Usar remoto</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Appointment form -->
+    <div class="overlay center" v-if="modals.appt" @click.self="modals.appt=false">
+      <div class="modal" style="max-width:480px">
+        <div class="modal-head"><h2>{{ apptForm.id ? 'Editar cita' : 'Nueva cita' }}</h2><button class="icon-btn" @click="modals.appt=false"><i class="ph ph-x"></i></button></div>
+        <div class="modal-body">
+          <div class="field mb-8"><label>Propiedad</label>
+            <select v-model="apptForm.propertyId">
+              <option value="">Seleccionar…</option>
+              <option v-for="p in eligibleProperties" :key="p.id" :value="p.id">{{ p.alias }}</option>
+            </select>
+          </div>
+          <div class="grid-2">
+            <div class="field"><label>Fecha</label><input type="date" v-model="apptForm.fecha" /></div>
+            <div class="field"><label>Hora</label><input type="time" v-model="apptForm.hora" /></div>
+            <div class="field"><label>Duración (min)</label><input type="number" v-model.number="apptForm.duracion" /></div>
+            <div class="field"><label>Estado</label>
+              <select v-model="apptForm.estado">
+                <option v-for="s in APPT_STATES" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </div>
+          </div>
+          <div class="field mt-8"><label>Observaciones</label><textarea v-model="apptForm.notas"></textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-danger" v-if="apptForm.id" @click="deleteAppt(apptForm.id)">Eliminar</button>
+          <button class="btn btn-ghost" @click="modals.appt=false">Cancelar</button>
+          <button class="btn btn-primary" @click="saveAppt">Guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Advisor form -->
+    <div class="overlay center" v-if="modals.advisor" @click.self="modals.advisor=false">
+      <div class="modal" style="max-width:480px">
+        <div class="modal-head"><h2>{{ advisorForm.id ? 'Editar asesor' : 'Nuevo asesor' }}</h2><button class="icon-btn" @click="modals.advisor=false"><i class="ph ph-x"></i></button></div>
+        <div class="modal-body">
+          <div class="field mb-8"><label>Nombre</label><input v-model="advisorForm.nombre" /></div>
+          <div class="field mb-8"><label>Inmobiliaria</label><input v-model="advisorForm.inmobiliaria" /></div>
+          <div class="grid-2">
+            <div class="field"><label>Teléfono</label><input v-model="advisorForm.telefono" /></div>
+            <div class="field"><label>WhatsApp</label><input v-model="advisorForm.whatsapp" placeholder="52…" /></div>
+            <div class="field"><label>Último contacto</label><input type="date" v-model="advisorForm.ultimoContacto" /></div>
+            <div class="field"><label>Próximo seguimiento</label><input type="date" v-model="advisorForm.proximoSeguimiento" /></div>
+          </div>
+          <div class="field mt-8"><label>Observaciones</label><textarea v-model="advisorForm.notas"></textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-danger" v-if="advisorForm.id" @click="deleteAdvisor(advisorForm.id)">Eliminar</button>
+          <button class="btn btn-ghost" @click="modals.advisor=false">Cancelar</button>
+          <button class="btn btn-primary" @click="saveAdvisor">Guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Compare -->
+    <div class="overlay center" v-if="showCompare" @click.self="showCompare=false">
+      <div class="modal" style="max-width:960px">
+        <div class="modal-head"><h2>Comparar</h2><button class="icon-btn" @click="showCompare=false"><i class="ph ph-x"></i></button></div>
+        <div class="modal-body">
+          <div class="compare-grid">
+            <div class="compare-col" v-for="p in compareProps" :key="p.id">
+              <h3 class="mb-8">{{ p.alias }}</h3>
+              <div class="compare-row"><span class="muted">Colonia</span><span>{{ p.colonia }}</span></div>
+              <div class="compare-row"><span class="muted">Renta</span><span>{{ money(p.costos?.renta) }}</span></div>
+              <div class="compare-row"><span class="muted">Total/mes</span><span>{{ money(totalMensual(p)) }}</span></div>
+              <div class="compare-row"><span class="muted">Inicial</span><span>{{ money(desembolsoInicial(p)) }}</span></div>
+              <div class="compare-row"><span class="muted">Recámaras</span><span>{{ p.fisicas?.recamaras ?? '—' }}</span></div>
+              <div class="compare-row"><span class="muted">Baños</span><span>{{ p.fisicas?.banos ?? '—' }}</span></div>
+              <div class="compare-row"><span class="muted">Estac.</span><span>{{ p.fisicas?.estacionamiento ?? '—' }}</span></div>
+              <div class="compare-row"><span class="muted">Amueblado</span><span>{{ amuebladoLabel(p.amueblado) }}</span></div>
+              <div class="compare-row"><span class="muted">Perros</span><span>{{ p.perros?.acepta }}</span></div>
+              <div class="compare-row"><span class="muted">Jardín</span><span>{{ p.espacios?.jardin }}</span></div>
+              <div class="compare-row"><span class="muted">Al Tec</span><span>{{ p.trasladoTrabajo?.min != null ? p.trasladoTrabajo.min+' min' : 'Sin dato' }}</span></div>
+              <div class="compare-row"><span class="muted">Prelim.</span><span>{{ fmtScore(scoreEval(p,'pre').score) }}</span></div>
+              <div class="compare-row"><span class="muted">Presenc.</span><span>{{ fmtScore(scoreEval(p,'post').score) }}</span></div>
+              <div class="compare-row"><span class="muted">Ventajas</span><span>{{ (p.evaluacion?.pre?.ventajas||p.evaluacion?.post?.ventajas||'—') }}</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Property detail -->
+    <div class="overlay" v-if="modals.property && editingProp" @click.self="closeProperty">
+      <div class="modal modal-fixed">
+        <div class="modal-head">
+          <h2>{{ editingProp.alias || 'Propiedad' }}</h2>
+          <button class="icon-btn" @click="duplicateProp(editingProp)" title="Duplicar"><i class="ph ph-copy"></i></button>
+          <button class="icon-btn" @click="closeProperty"><i class="ph ph-x"></i></button>
+        </div>
+        <div class="tabs" ref="propTabsEl">
+          <button
+            v-for="t in propTabs" :key="t.id"
+            class="tab" :class="{active: propTab===t.id}"
+            :data-tab="t.id"
+            type="button"
+            @click="propTab=t.id; onPropTab(t.id)"
+          >{{ t.label }}<span v-if="tabBadge(editingProp, t.id)" class="tab-badge">{{ tabBadge(editingProp, t.id) }}</span></button>
+        </div>
+        <div class="modal-body">
+          <!-- Resumen -->
+          <template v-if="propTab==='resumen'">
+            <div class="grid-2">
+              <div class="field"><label>Alias</label><input v-model="editingProp.alias" @change="saveEditingProp" /></div>
+              <div class="field"><label>Colonia</label><input v-model="editingProp.colonia" @change="saveEditingProp" /></div>
+              <div class="field" style="grid-column:1/-1"><label>Dirección</label><input v-model="editingProp.direccion" @change="saveEditingProp" /></div>
+              <div class="field" style="grid-column:1/-1">
+                <label>Enlace</label>
+                <div class="row">
+                  <input class="grow" v-model="editingProp.enlace" @change="saveEditingProp" placeholder="https://…" />
+                  <a v-if="editingProp.enlace" :href="editingProp.enlace" target="_blank" rel="noopener" class="btn btn-sm">Abrir</a>
+                </div>
+              </div>
+              <div class="field"><label>Estado</label>
+                <select :value="editingProp.estado" @change="changeEstado(editingProp, $event.target.value)">
+                  <option v-for="s in PROPERTY_STATES" :key="s" :value="s">{{ s }}</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Asesor</label>
+                <div class="row">
+                  <select class="grow" v-model="editingProp.advisorId" @change="saveEditingProp">
+                    <option value="">Sin asesor</option>
+                    <option v-for="a in data.advisors" :key="a.id" :value="a.id">{{ a.nombre }}</option>
+                  </select>
+                  <button class="btn btn-sm" type="button" @click="quickNewAdvisor" title="Nuevo asesor">+</button>
+                </div>
+              </div>
+              <div class="field"><label>Amueblado</label>
+                <select v-model="editingProp.amueblado" @change="saveEditingProp">
+                  <option value="sin">Sin amueblar</option>
+                  <option value="semi">Semiamueblada</option>
+                  <option value="full">Amueblada</option>
+                  <option value="pc">Por confirmar</option>
+                </select>
+              </div>
+              <div class="field"><label>Favorita</label>
+                <select v-model="editingProp.favorita" @change="saveEditingProp">
+                  <option :value="false">No</option>
+                  <option :value="true">Sí</option>
+                </select>
+              </div>
+            </div>
+            <div class="alert ok mt-12" v-if="editingProp.amueblado==='sin'">Preferencia de amueblado: compatible.</div>
+            <div class="alert mt-12" v-else>Menor compatibilidad: preferencia es sin amueblar.</div>
+            <div class="alert danger mt-12" v-if="editingProp.descarte">Descartada · {{ descarteLabel(editingProp.descarte.motivo) }} · {{ editingProp.descarte.nota || '' }}</div>
+            <div class="field mt-12"><label>Observaciones</label><textarea v-model="editingProp.observaciones" @change="saveEditingProp"></textarea></div>
+            <div class="field mt-12"><label>URL de foto</label>
+              <div class="row"><input class="grow" v-model="photoUrl" placeholder="https://…" /><button class="btn" @click="addPhotoUrl">Agregar</button></div>
+            </div>
+            <div class="row mt-8" v-if="editingProp.fotos?.length">
+              <img v-for="(f,i) in editingProp.fotos" :key="i" :src="f.thumb||f.url" style="width:64px;height:64px;object-fit:cover;border-radius:8px;cursor:pointer" @click="editingProp.fotos.splice(i,1); saveEditingProp()" title="Clic para quitar" />
+            </div>
+            <div class="row mt-16">
+              <button class="btn" v-if="advisorOf(editingProp)" @click="whatsappForProp(editingProp)"><i class="ph ph-whatsapp-logo"></i> WhatsApp</button>
+              <button class="btn btn-danger" @click="deleteProp(editingProp.id)">Eliminar</button>
+            </div>
+          </template>
+
+          <!-- Costos -->
+          <template v-if="propTab==='costos'">
+            <div class="grid-2">
+              <div class="field"><label>Renta mensual</label><input type="number" v-model.number="editingProp.costos.renta" @change="saveEditingProp" /></div>
+              <div class="field"><label>Mantenimiento</label><input type="number" v-model.number="editingProp.costos.mantenimiento" @change="saveEditingProp" /></div>
+              <div class="field"><label>Otros mensuales</label><input type="number" v-model.number="editingProp.costos.otrosMensuales" @change="saveEditingProp" /></div>
+              <div class="field"><label>Depósito</label><input type="number" v-model.number="editingProp.costos.deposito" @change="saveEditingProp" /></div>
+              <div class="field"><label>Otros iniciales</label><input type="number" v-model.number="editingProp.costos.otrosIniciales" @change="saveEditingProp" /></div>
+            </div>
+            <div class="field mt-8"><label>Servicios incluidos</label><input v-model="editingProp.costos.serviciosIncluidos" @change="saveEditingProp" placeholder="Agua, gas…" /></div>
+            <dl class="kv mt-16 card-soft">
+              <dt>Costo mensual total</dt><dd>{{ money(totalMensual(editingProp)) }}</dd>
+              <dt>Desembolso inicial estimado</dt><dd>{{ money(desembolsoInicial(editingProp)) }}</dd>
+            </dl>
+          </template>
+
+          <!-- Físicas / espacios -->
+          <template v-if="propTab==='espacios'">
+            <h4 class="mb-8">Características físicas</h4>
+            <div class="grid-3 mb-16">
+              <div class="field"><label>Recámaras</label><input type="number" v-model.number="editingProp.fisicas.recamaras" @change="saveEditingProp" /></div>
+              <div class="field"><label>Baños</label><input type="number" step="0.5" v-model.number="editingProp.fisicas.banos" @change="saveEditingProp" /></div>
+              <div class="field"><label>Medios baños</label><input type="number" v-model.number="editingProp.fisicas.mediosBanos" @change="saveEditingProp" /></div>
+              <div class="field"><label>Estacionamiento</label><input type="number" v-model.number="editingProp.fisicas.estacionamiento" @change="saveEditingProp" /></div>
+              <div class="field"><label>m² construidos</label><input type="number" v-model.number="editingProp.fisicas.m2Const" @change="saveEditingProp" /></div>
+              <div class="field"><label>m² terreno</label><input type="number" v-model.number="editingProp.fisicas.m2Terreno" @change="saveEditingProp" /></div>
+              <div class="field"><label>Plantas</label><input type="number" v-model.number="editingProp.fisicas.plantas" @change="saveEditingProp" /></div>
+              <div class="field"><label>Conservación</label><input v-model="editingProp.fisicas.conservacion" @change="saveEditingProp" /></div>
+              <div class="field"><label>Disponible mudanza</label><input v-model="editingProp.fisicas.disponibilidad" @change="saveEditingProp" /></div>
+            </div>
+            <h4 class="mb-8">Espacios privados</h4>
+            <div v-for="k in ['jardin','terraza','balcon']" :key="k" class="tri">
+              <span>{{ {jardin:'Jardín',terraza:'Terraza',balcon:'Balcón'}[k] }}</span>
+              <div class="seg">
+                <button :class="{'on-si':editingProp.espacios[k]==='si'}" @click="setTri(editingProp.espacios,k,'si')">Sí</button>
+                <button :class="{'on-no':editingProp.espacios[k]==='no'}" @click="setTri(editingProp.espacios,k,'no')">No</button>
+                <button :class="{'on-pc':editingProp.espacios[k]==='pc'}" @click="setTri(editingProp.espacios,k,'pc')">?</button>
+              </div>
+            </div>
+            <div class="field mt-8"><label>Áreas comunes</label>
+              <select v-model="editingProp.amenidades.tieneComunes" @change="saveEditingProp">
+                <option value="pc">Por confirmar</option><option value="si">Sí</option><option value="no">No</option>
+              </select>
+            </div>
+            <h4 class="mt-16 mb-8">Amenidades</h4>
+            <div v-for="a in AMENITY_KEYS" :key="a.key" class="tri">
+              <span>{{ a.label }}</span>
+              <div class="seg">
+                <button :class="{'on-si':editingProp.amenidades.items[a.key]==='si'}" @click="setTri(editingProp.amenidades.items,a.key,'si')">Sí</button>
+                <button :class="{'on-no':editingProp.amenidades.items[a.key]==='no'}" @click="setTri(editingProp.amenidades.items,a.key,'no')">No</button>
+                <button :class="{'on-pc':!editingProp.amenidades.items[a.key]||editingProp.amenidades.items[a.key]==='pc'}" @click="setTri(editingProp.amenidades.items,a.key,'pc')">?</button>
+              </div>
+            </div>
+            <div class="field mt-12"><label>Otras amenidades</label><input v-model="editingProp.amenidades.otras" @change="saveEditingProp" /></div>
+            <div class="field mt-8"><label>Observaciones de espacios</label><textarea v-model="editingProp.amenidades.notas" @change="saveEditingProp"></textarea></div>
+          </template>
+
+          <!-- Mascotas -->
+          <template v-if="propTab==='mascotas'">
+            <div class="alert info">Requisito obligatorio: aceptar ambos perros (uno grande).</div>
+            <div class="field mb-8"><label>¿Acepta ambos perros?</label>
+              <select v-model="editingProp.perros.acepta" @change="onPerrosChange">
+                <option value="pc">Por confirmar</option>
+                <option value="si">Sí</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+            <div class="alert" v-if="editingProp.perros.acepta==='pc'">Requisito indispensable pendiente.</div>
+            <div class="field mb-8"><label>Restricciones de tamaño/raza</label><input v-model="editingProp.perros.restricciones" @change="saveEditingProp" /></div>
+            <div class="field mb-8"><label>Depósito adicional mascotas</label><input type="number" v-model.number="editingProp.perros.depositoExtra" @change="saveEditingProp" /></div>
+            <div class="field"><label>Reglas especiales</label><textarea v-model="editingProp.perros.reglas" @change="saveEditingProp"></textarea></div>
+          </template>
+
+          <!-- Requisitos -->
+          <template v-if="propTab==='requisitos'">
+            <div class="mb-12">
+              <div class="row mb-8">
+                <span class="small grow">Avance: <strong>{{ reqProgress(editingProp) }}%</strong></span>
+                <span class="tiny muted">P = pendiente · ✓ = cumplido · N/A = no aplica</span>
+              </div>
+              <div class="progress-bar"><div :style="{width: reqProgress(editingProp)+'%'}"></div></div>
+            </div>
+            <div class="req-list mb-12">
+              <div v-for="r in editingProp.requisitos.items" :key="r.id" class="req-item">
+                <div class="req-head">
+                  <span class="req-name" :class="{done: r.estado==='cumplido', na: r.estado==='na'}">
+                    {{ r.nombre }}
+                    <span v-if="r.costo" class="badge ml-4">{{ money(r.costo) }}</span>
+                    <span v-if="r.fechaLimite" class="tiny muted"> · {{ r.fechaLimite }}</span>
+                  </span>
+                  <div class="req-pills">
+                    <button type="button" :class="{'on-ns': r.estado==='no_solicitado'}" @click="r.estado='no_solicitado'; saveEditingProp()" title="No solicitado">—</button>
+                    <button type="button" :class="{'on-pend': r.estado==='pendiente'}" @click="r.estado='pendiente'; saveEditingProp()" title="Pendiente">P</button>
+                    <button type="button" :class="{'on-ok': r.estado==='cumplido'}" @click="r.estado='cumplido'; saveEditingProp()" title="Cumplido">✓</button>
+                    <button type="button" :class="{'on-na': r.estado==='na'}" @click="r.estado='na'; saveEditingProp()" title="No aplica">N/A</button>
+                  </div>
+                  <button class="icon-btn" type="button" title="Costo, fecha y notas" @click="toggleReqOpen(r.id)">
+                    <i class="ph" :class="openReqs[r.id] ? 'ph-caret-up' : 'ph-dots-three'"></i>
+                  </button>
+                  <button class="icon-btn" type="button" v-if="r.custom" @click="removeReq(r.id)" title="Eliminar"><i class="ph ph-trash"></i></button>
+                </div>
+                <div class="req-extra" v-if="openReqs[r.id]">
+                  <div class="field"><label>Costo</label><input type="number" v-model.number="r.costo" @change="saveEditingProp" placeholder="0" /></div>
+                  <div class="field"><label>Fecha límite</label><input type="date" v-model="r.fechaLimite" @change="saveEditingProp" /></div>
+                  <div class="field"><label>Notas</label><input v-model="r.notas" @change="saveEditingProp" placeholder="Observación…" /></div>
+                </div>
+              </div>
+            </div>
+            <div class="row mb-12">
+              <input class="input grow" v-model="newReqName" placeholder="Agregar requisito personalizado…" @keydown.enter.prevent="addCustomReq" />
+              <button class="btn" type="button" @click="addCustomReq">Agregar</button>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label>Duración del contrato</label><input v-model="editingProp.requisitos.duracionContrato" @change="saveEditingProp" placeholder="12 meses" /></div>
+              <div class="field"><label>Condiciones especiales</label><input v-model="editingProp.requisitos.condiciones" @change="saveEditingProp" /></div>
+            </div>
+            <dl class="kv mt-12 card-soft">
+              <dt>Desembolso inicial (costos + reqs)</dt><dd>{{ money(desembolsoInicial(editingProp) + reqCosts(editingProp)) }}</dd>
+            </dl>
+          </template>
+
+          <!-- Ubicación -->
+          <template v-if="propTab==='ubicacion'">
+            <div class="card-soft mb-12">
+              <div class="small muted mb-4">Dirección registrada</div>
+              <div>{{ editingProp.direccion || 'Sin dirección' }}<span v-if="editingProp.colonia"> · {{ editingProp.colonia }}</span></div>
+              <div class="tiny faint mt-4">Monterrey, N.L.</div>
+            </div>
+
+            <!-- Mapa interactivo si hay API key -->
+            <div v-if="mapsReady" class="map-box tall mb-12" ref="propMapEl"></div>
+            <!-- Vista embebida sin API key -->
+            <div v-else-if="mapQuery(editingProp)" class="map-box tall mb-12">
+              <iframe
+                title="Mapa de la propiedad"
+                loading="lazy"
+                referrerpolicy="no-referrer-when-downgrade"
+                :src="'https://maps.google.com/maps?q=' + encodeURIComponent(mapQuery(editingProp)) + '&z=15&output=embed'"
+              ></iframe>
+            </div>
+            <div v-else class="map-fallback compact card-soft mb-12">
+              <p class="small">Agrega dirección o colonia en <strong>Resumen</strong> para ver el mapa, o pega coordenadas abajo.</p>
+            </div>
+
+            <div v-if="!mapsReady" class="alert info mb-12">
+              Sin API key aún puedes abrir Google Maps y capturar el traslado a mano.
+              <button class="btn btn-sm mt-8" type="button" @click="view='settings'; closeProperty()">Ir a Ajustes</button>
+            </div>
+
+            <div class="loc-actions mb-16">
+              <button class="btn" type="button" @click="openInMaps(editingProp)"><i class="ph ph-map-pin"></i> Abrir en Maps</button>
+              <button class="btn btn-primary" type="button" @click="navigateTo(editingProp)"><i class="ph ph-navigation-arrow"></i> Cómo llegar</button>
+              <button class="btn" type="button" @click="geocodeProp" :disabled="!mapsReady || mapsBusy" :title="mapsReady ? '' : 'Requiere API key'">
+                Ubicar con API
+              </button>
+            </div>
+
+            <div class="card-soft mb-12">
+              <strong class="mb-8" style="display:block">Coordenadas</strong>
+              <p class="tiny muted mb-8">Opcional. En Google Maps: clic derecho en el pin → copiar coordenadas.</p>
+              <div class="grid-2">
+                <div class="field"><label>Lat</label><input type="number" step="any" v-model.number="editingProp.lat" @change="saveEditingProp" placeholder="25.68…" /></div>
+                <div class="field"><label>Lng</label><input type="number" step="any" v-model.number="editingProp.lng" @change="saveEditingProp" placeholder="-100.31…" /></div>
+              </div>
+            </div>
+
+            <div class="card-soft mb-12">
+              <div class="row mb-8">
+                <strong class="grow">Traslado al Tec</strong>
+                <button class="btn btn-sm" type="button" @click="calcWorkTravel" :disabled="!mapsReady || mapsBusy || editingProp.lat==null" :title="mapsReady ? '' : 'Requiere API key'">Calcular con API</button>
+              </div>
+              <p v-if="editingProp.trasladoTrabajo?.min != null" class="mb-8">
+                <strong>{{ editingProp.trasladoTrabajo.min }} min</strong>
+                <span v-if="editingProp.trasladoTrabajo.km != null"> · {{ editingProp.trasladoTrabajo.km }} km</span>
+                <span class="badge ml-8">{{ editingProp.trasladoTrabajo.fuente }}</span>
+              </p>
+              <p v-else class="muted small mb-8">Sin dato todavía. En Google Maps pide la ruta al Tec y anota los minutos aquí.</p>
+              <div class="grid-2">
+                <div class="field"><label>Minutos</label><input type="number" v-model.number="manualTravel.min" placeholder="25" /></div>
+                <div class="field"><label>Km</label><input type="number" step="0.1" v-model.number="manualTravel.km" placeholder="12.5" /></div>
+              </div>
+              <button class="btn btn-primary btn-sm mt-8" type="button" @click="saveManualTravel">Guardar traslado</button>
+            </div>
+
+            <div class="card-soft">
+              <div class="row mb-8">
+                <strong class="grow">Servicios cercanos</strong>
+                <button class="btn btn-sm" type="button" @click="searchBasicPlaces" :disabled="!mapsReady || mapsBusy || editingProp.lat==null">Buscar básicos</button>
+              </div>
+              <p class="tiny muted mb-8" v-if="mapsReady">Básicos: supermercado, farmacia, hospital. El resto, uno por uno.</p>
+              <p class="tiny muted mb-8" v-else>Con API key podrás buscarlos aquí. Por ahora anótalos en Observaciones (Resumen).</p>
+              <div v-for="cat in PLACE_CATS" :key="cat.key" class="tri">
+                <div>
+                  <div>{{ cat.label }}</div>
+                  <div class="tiny muted" v-if="editingProp.servicios?.[cat.key]">
+                    {{ editingProp.servicios[cat.key].nombre }} · {{ editingProp.servicios[cat.key].distanciaTexto || '' }}
+                    <span class="badge">{{ editingProp.servicios[cat.key].fuente }}</span>
+                  </div>
+                  <div class="tiny faint" v-else>Sin dato</div>
+                </div>
+                <button class="btn btn-sm" type="button" v-if="!cat.basic" @click="searchOnePlace(cat)" :disabled="!mapsReady || mapsBusy || editingProp.lat==null">Buscar</button>
+              </div>
+            </div>
+          </template>
+
+          <!-- Evaluación -->
+          <template v-if="propTab==='eval'">
+            <div class="grid-2 gap-16">
+              <div>
+                <h4 class="mb-8">Preliminar <span class="badge">{{ scoreEval(editingProp,'pre').pct }}%</span></h4>
+                <div v-for="(label,key) in DIM_LABELS" :key="'pre'+key" class="mb-12">
+                  <div class="small mb-4">{{ label }}</div>
+                  <div class="stars">
+                    <button v-for="n in 5" :key="n" class="star" :class="{on: (editingProp.evaluacion.pre.scores[key]||0)>=n}" @click="setScore('pre',key,n)">★</button>
+                    <button class="btn btn-sm btn-ghost" @click="setScore('pre',key,null)">Limpiar</button>
+                  </div>
+                </div>
+                <div class="field"><label>Ventajas</label><textarea v-model="editingProp.evaluacion.pre.ventajas" @change="saveEditingProp"></textarea></div>
+                <div class="field mt-8"><label>Desventajas</label><textarea v-model="editingProp.evaluacion.pre.desventajas" @change="saveEditingProp"></textarea></div>
+                <div class="field mt-8"><label>Notas</label><textarea v-model="editingProp.evaluacion.pre.notas" @change="saveEditingProp"></textarea></div>
+                <p class="mt-8"><strong>Puntaje: {{ fmtScore(scoreEval(editingProp,'pre').score) }}</strong></p>
+              </div>
+              <div>
+                <h4 class="mb-8">Presencial <span class="badge">{{ scoreEval(editingProp,'post').pct }}%</span></h4>
+                <div v-for="(label,key) in DIM_LABELS" :key="'post'+key" class="mb-12">
+                  <div class="small mb-4">{{ label }}</div>
+                  <div class="stars">
+                    <button v-for="n in 5" :key="n" class="star" :class="{on: (editingProp.evaluacion.post.scores[key]||0)>=n}" @click="setScore('post',key,n)">★</button>
+                    <button class="btn btn-sm btn-ghost" @click="setScore('post',key,null)">Limpiar</button>
+                  </div>
+                </div>
+                <div class="field"><label>Ventajas</label><textarea v-model="editingProp.evaluacion.post.ventajas" @change="saveEditingProp"></textarea></div>
+                <div class="field mt-8"><label>Desventajas</label><textarea v-model="editingProp.evaluacion.post.desventajas" @change="saveEditingProp"></textarea></div>
+                <div class="field mt-8"><label>Notas</label><textarea v-model="editingProp.evaluacion.post.notas" @change="saveEditingProp"></textarea></div>
+                <p class="mt-8"><strong>Puntaje: {{ fmtScore(scoreEval(editingProp,'post').score) }}</strong></p>
+              </div>
+            </div>
+          </template>
+
+          <!-- Citas de la propiedad -->
+          <template v-if="propTab==='citas'">
+            <button class="btn btn-primary mb-12" @click="openApptForm({propertyId: editingProp.id})">Nueva cita</button>
+            <div v-for="a in apptsOf(editingProp.id)" :key="a.id" class="appt mb-8" :class="apptClass(a)" @click="openApptForm(a)">
+              <div><div class="appt-time">{{ a.hora }}</div><div class="appt-dur">{{ a.fecha }}</div></div>
+              <div><span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
+                <div class="small muted mt-8">{{ a.notas }}</div>
+              </div>
+            </div>
+            <div v-if="!apptsOf(editingProp.id).length" class="muted small">Sin citas.</div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toasts -->
+    <div class="toasts">
+      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">{{ t.text }}</div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

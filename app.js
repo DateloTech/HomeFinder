@@ -1,0 +1,1865 @@
+/* HomeFinder Monterrey — Vue 3 CDN app */
+(() => {
+  const { createApp, reactive, computed, ref, watch, nextTick, onMounted } = Vue;
+
+  const STORAGE_KEY = "homefinder_v1";
+  const BACKUP_KEY = "homefinder_backups_v1";
+  const SYNC_META_KEY = "homefinder_sync_meta_v1";
+  const GIST_FILENAME = "homefinder.json";
+
+  const PROPERTY_STATES = [
+    "Por revisar", "Interesante", "Contacto pendiente", "Contactado",
+    "Cita solicitada", "Cita confirmada", "Visitada", "Favorita", "Descartada",
+  ];
+  const APPT_STATES = ["Por solicitar", "Solicitada", "Confirmada", "Reprogramada", "Realizada", "Cancelada"];
+  const DIM_LABELS = {
+    precio: "Precio y costo total",
+    seguridad: "Seguridad percibida de la zona",
+    cercania: "Cercanía al trabajo",
+    calidad: "Calidad y estado de la vivienda",
+    servicios: "Servicios cercanos",
+    entretenimiento: "Entretenimiento y estilo de vida",
+  };
+  const AMENITY_KEYS = [
+    { key: "alberca", label: "Alberca" },
+    { key: "gimnasio", label: "Gimnasio" },
+    { key: "asadores", label: "Área de asadores" },
+    { key: "tenis", label: "Cancha de tenis" },
+    { key: "basquet", label: "Cancha de básquetbol" },
+    { key: "futbol", label: "Cancha de fútbol" },
+    { key: "perros", label: "Área para perros" },
+    { key: "salon", label: "Salón de usos múltiples" },
+    { key: "jardines", label: "Jardines comunes" },
+    { key: "juegos", label: "Juegos infantiles" },
+  ];
+  const DEFAULT_REQS = [
+    "Identificación oficial", "Comprobante de ingresos", "Recibos de nómina",
+    "Estados de cuenta", "Comprobante de domicilio", "Referencias personales",
+    "Referencias laborales", "Aval o fiador", "Obligado solidario",
+    "Póliza jurídica", "Investigación crediticia", "Depósito en garantía",
+    "Primer mes de renta", "Firma del contrato",
+  ];
+  const PLACE_CATS = [
+    { key: "supermercado", label: "Supermercado", type: "supermarket", basic: true },
+    { key: "farmacia", label: "Farmacia", type: "pharmacy", basic: true },
+    { key: "hospital", label: "Hospital", type: "hospital", basic: true },
+    { key: "banco", label: "Banco", type: "bank", basic: false },
+    { key: "parque", label: "Parque", type: "park", basic: false },
+    { key: "restaurante", label: "Restaurante", type: "restaurant", basic: false },
+    { key: "gimnasio", label: "Gimnasio", type: "gym", basic: false },
+    { key: "plaza", label: "Plaza / centro comercial", type: "shopping_mall", basic: false },
+    { key: "entretenimiento", label: "Entretenimiento", type: "movie_theater", basic: false },
+  ];
+
+  const uid = () => crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+
+  function emptyScores() {
+    return { precio: null, seguridad: null, cercania: null, calidad: null, servicios: null, entretenimiento: null };
+  }
+  function defaultReqs() {
+    return DEFAULT_REQS.map((nombre) => ({
+      id: uid(), nombre, estado: "no_solicitado", costo: null, fechaLimite: "", notas: "", custom: false,
+    }));
+  }
+  function newProperty(partial = {}) {
+    return {
+      id: uid(),
+      alias: "", colonia: "", direccion: "", enlace: "", lat: null, lng: null,
+      fotos: [], observaciones: "",
+      costos: { renta: null, mantenimiento: null, serviciosIncluidos: "", otrosMensuales: null, deposito: null, otrosIniciales: null },
+      fisicas: { recamaras: null, banos: null, mediosBanos: null, estacionamiento: null, m2Const: null, m2Terreno: null, plantas: null, conservacion: "", disponibilidad: "" },
+      amueblado: "pc",
+      espacios: { jardin: "pc", terraza: "pc", balcon: "pc" },
+      amenidades: { tieneComunes: "pc", items: {}, otras: "", notas: "" },
+      perros: { acepta: "pc", restricciones: "", depositoExtra: null, reglas: "" },
+      requisitos: { items: defaultReqs(), duracionContrato: "", condiciones: "" },
+      trasladoTrabajo: null,
+      servicios: {},
+      travelCache: {},
+      estado: "Por revisar",
+      descarte: null,
+      favorita: false,
+      advisorId: "",
+      zona: null,
+      evaluacion: {
+        pre: { scores: emptyScores(), ventajas: "", desventajas: "", notas: "" },
+        post: { scores: emptyScores(), ventajas: "", desventajas: "", notas: "" },
+      },
+      createdAt: new Date().toISOString(),
+      ...partial,
+    };
+  }
+  function newAdvisor(partial = {}) {
+    return {
+      id: uid(), nombre: "", inmobiliaria: "", telefono: "", whatsapp: "",
+      ultimoContacto: "", proximoSeguimiento: "", notas: "", bitacora: [],
+      ...partial,
+    };
+  }
+  function newAppt(partial = {}) {
+    return {
+      id: uid(), propertyId: "", advisorId: "", fecha: "", hora: "10:00",
+      duracion: 45, estado: "Por solicitar", notas: "",
+      ...partial,
+    };
+  }
+  function defaultConfig() {
+    return {
+      dias: [
+        { fecha: "2026-11-21", label: "Sábado", desde: "09:00", hasta: "20:00" },
+        { fecha: "2026-11-22", label: "Domingo", desde: "09:00", hasta: "20:00" },
+        { fecha: "2026-11-23", label: "Lunes", desde: "15:00", hasta: "20:00" },
+        { fecha: "2026-11-24", label: "Martes", desde: "09:00", hasta: "16:45" },
+      ],
+      duracionDefault: 45,
+      margen: 15,
+      presupuesto: null,
+      ponderaciones: { precio: 20, seguridad: 20, cercania: 20, calidad: 15, servicios: 15, entretenimiento: 10 },
+      trabajo: {
+        nombre: "Rectoría del Tecnológico de Monterrey, Campus Monterrey",
+        lat: 25.6515, lng: -100.2895,
+      },
+      githubToken: "",
+      gistId: "",
+      mapsKey: "",
+      openaiKey: "",
+      openaiModel: "gpt-4o-mini",
+      apiUsage: { geocoding: 0, routes: 0, places: 0 },
+    };
+  }
+  function emptyData() {
+    return {
+      rev: 1,
+      updatedAt: new Date().toISOString(),
+      properties: [],
+      advisors: [],
+      appointments: [],
+      config: defaultConfig(),
+    };
+  }
+
+  /* ---------- Persistence ---------- */
+  function loadLocal() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return emptyData();
+      const parsed = JSON.parse(raw);
+      return migrate(parsed);
+    } catch {
+      return emptyData();
+    }
+  }
+  function migrate(d) {
+    const base = emptyData();
+    return {
+      ...base,
+      ...d,
+      config: { ...base.config, ...(d.config || {}), ponderaciones: { ...base.config.ponderaciones, ...(d.config?.ponderaciones || {}) }, trabajo: { ...base.config.trabajo, ...(d.config?.trabajo || {}) }, apiUsage: { ...base.config.apiUsage, ...(d.config?.apiUsage || {}) } },
+      properties: Array.isArray(d.properties) ? d.properties : [],
+      advisors: Array.isArray(d.advisors) ? d.advisors : [],
+      appointments: Array.isArray(d.appointments) ? d.appointments : [],
+    };
+  }
+  function loadSyncMeta() {
+    try { return JSON.parse(localStorage.getItem(SYNC_META_KEY) || "{}"); }
+    catch { return {}; }
+  }
+  function saveSyncMeta(m) { localStorage.setItem(SYNC_META_KEY, JSON.stringify(m)); }
+  function loadBackups() {
+    try { return JSON.parse(localStorage.getItem(BACKUP_KEY) || "[]"); }
+    catch { return []; }
+  }
+  function pushBackup(data, label) {
+    const list = loadBackups();
+    list.unshift({ at: new Date().toLocaleString("es-MX"), label, data: JSON.parse(JSON.stringify(data)) });
+    localStorage.setItem(BACKUP_KEY, JSON.stringify(list.slice(0, 5)));
+    return list.slice(0, 5);
+  }
+
+  /* ---------- Helpers ---------- */
+  function money(n) {
+    if (n == null || n === "" || Number.isNaN(Number(n))) return "—";
+    return new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 0 }).format(Number(n));
+  }
+  function totalMensual(p) {
+    const c = p?.costos || {};
+    return (Number(c.renta) || 0) + (Number(c.mantenimiento) || 0) + (Number(c.otrosMensuales) || 0);
+  }
+  function desembolsoInicial(p) {
+    const c = p?.costos || {};
+    return (Number(c.deposito) || 0) + (Number(c.otrosIniciales) || 0) + (Number(c.renta) || 0);
+  }
+  function reqCosts(p) {
+    return (p?.requisitos?.items || []).reduce((s, r) => s + (Number(r.costo) || 0), 0);
+  }
+  function amuebladoLabel(v) {
+    return ({ sin: "Sin amueblar", semi: "Semiamueblada", full: "Amueblada", pc: "Amueblado ?" })[v] || "Amueblado ?";
+  }
+  function descarteLabel(m) {
+    return ({ mascotas: "Mascotas", precio: "Precio", ubicacion: "Ubicación", decision: "Decisión", otro: "Otro" })[m] || "Descartada";
+  }
+  function haversineKm(a, b) {
+    if (!a || !b || a.lat == null || b.lat == null) return null;
+    const R = 6371, toR = (d) => d * Math.PI / 180;
+    const dLat = toR(b.lat - a.lat), dLng = toR(b.lng - a.lng);
+    const x = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+  function timeToMin(t) {
+    if (!t) return 0;
+    const [h, m] = t.split(":").map(Number);
+    return h * 60 + (m || 0);
+  }
+  function minToTime(m) {
+    const h = Math.floor(m / 60), mm = m % 60;
+    return String(h).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
+  }
+  function formatDay(fecha) {
+    if (!fecha) return "";
+    const d = new Date(fecha + "T12:00:00");
+    return d.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "short" });
+  }
+  function formatDayShort(fecha) {
+    if (!fecha) return "";
+    const d = new Date(fecha + "T12:00:00");
+    return d.toLocaleDateString("es-MX", { weekday: "short", day: "numeric" });
+  }
+
+  /* ---------- Score ---------- */
+  function scoreEval(p, kind, ponderaciones) {
+    const scores = p?.evaluacion?.[kind]?.scores || {};
+    const w = ponderaciones || {};
+    let num = 0, den = 0, filled = 0, total = Object.keys(DIM_LABELS).length;
+    for (const key of Object.keys(DIM_LABELS)) {
+      const s = scores[key];
+      const weight = Number(w[key]) || 0;
+      if (s != null && s !== "") {
+        filled++;
+        num += Number(s) * weight;
+        den += weight;
+      }
+    }
+    return {
+      score: den > 0 ? num / den : null,
+      pct: Math.round((filled / total) * 100),
+    };
+  }
+
+  /* ---------- Zones ---------- */
+  function assignZones(properties) {
+    const withCoords = properties.filter((p) => p.lat != null && p.lng != null && p.estado !== "Descartada");
+    const zones = [];
+    const ZONE_KM = 3;
+    for (const p of withCoords) {
+      let found = null;
+      for (const z of zones) {
+        const dist = haversineKm(p, z.center);
+        if (dist != null && dist <= ZONE_KM) { found = z; break; }
+      }
+      if (found) {
+        found.ids.push(p.id);
+        const n = found.ids.length;
+        found.center.lat = (found.center.lat * (n - 1) + p.lat) / n;
+        found.center.lng = (found.center.lng * (n - 1) + p.lng) / n;
+      } else {
+        zones.push({ id: "Z" + (zones.length + 1), center: { lat: p.lat, lng: p.lng }, ids: [p.id] });
+      }
+    }
+    return zones;
+  }
+
+  /* ---------- Vue App ---------- */
+  createApp({
+    setup() {
+      const data = reactive(loadLocal());
+      const syncMeta = reactive({ knownRev: loadSyncMeta().knownRev ?? null, pending: !!loadSyncMeta().pending, lastSyncAt: loadSyncMeta().lastSyncAt || null });
+      const backups = ref(loadBackups());
+      const view = ref("home");
+      const toasts = ref([]);
+      const mapsReady = ref(false);
+      const mapsBusy = ref(false);
+      const mapsLoading = ref(false);
+      let mapsScriptPromise = null;
+      let propMap = null, propMarker = null, dayMap = null, dayMarkers = [];
+
+      const sync = reactive({ level: "ok", label: "Guardado local", detail: "" });
+      const conflict = ref(null);
+      let syncTimer = null;
+      let retryTimer = null;
+      let retryAttempt = 0;
+      let polling = false;
+
+      const navItems = [
+        { id: "home", label: "Inicio", icon: "ph-house" },
+        { id: "properties", label: "Propiedades", icon: "ph-buildings" },
+        { id: "agenda", label: "Agenda", icon: "ph-calendar" },
+        { id: "ranking", label: "Ranking", icon: "ph-trophy" },
+        { id: "advisors", label: "Asesores", icon: "ph-users" },
+      ];
+
+      const modals = reactive({ quickAdd: false, pasteAd: false, discard: false, appt: false, advisor: false, property: false });
+      const quickForm = reactive({ alias: "", colonia: "", renta: null, enlace: "" });
+      const pasteText = ref("");
+      const extractForm = ref(null);
+      const discardForm = reactive({ propertyId: null, motivo: "decision", nota: "" });
+      const apptForm = reactive(newAppt());
+      const advisorForm = reactive(newAdvisor());
+      const editingProp = ref(null);
+      const propTab = ref("resumen");
+      const propTabs = [
+        { id: "resumen", label: "Resumen" }, { id: "costos", label: "Costos" },
+        { id: "espacios", label: "Espacios" }, { id: "mascotas", label: "Mascotas" },
+        { id: "requisitos", label: "Requisitos" }, { id: "ubicacion", label: "Ubicación" },
+        { id: "eval", label: "Evaluación" }, { id: "citas", label: "Citas" },
+      ];
+      const photoUrl = ref("");
+      const newReqName = ref("");
+      const openReqs = reactive({});
+      const manualTravel = reactive({ min: null, km: null });
+      const propFilter = reactive({ q: "", estado: "", perros: "" });
+      const agendaDay = ref(data.config.dias[0]?.fecha || "2026-11-21");
+      const agendaMode = ref("day");
+      const plannerResult = ref(null);
+      const plannerBusy = ref(false);
+      const rankSort = ref("auto");
+      const rankOnlyEligible = ref(true);
+      const compareIds = ref([]);
+      const showCompare = ref(false);
+      const secs = reactive({ dias: true, weights: false, sync: true, maps: false, ai: false, backup: false });
+      const propMapEl = ref(null);
+      const propTabsEl = ref(null);
+      const dayMapEl = ref(null);
+      const overviewMapEl = ref(null);
+      const showOverviewMap = ref(false);
+      let overviewMap = null, overviewMarkers = [];
+
+      /* AI */
+      const aiOpen = ref(false);
+      const aiInput = ref("");
+      const aiMessages = ref([{ role: "system", content: "Pregúntame sobre tus propiedades, citas o asesores." }]);
+      const aiBusy = ref(false);
+      const pendingActions = ref([]);
+      const aiMsgs = ref(null);
+
+      function toast(text, type = "") {
+        const id = uid();
+        toasts.value.push({ id, text, type });
+        setTimeout(() => { toasts.value = toasts.value.filter((t) => t.id !== id); }, 3200);
+      }
+
+      function syncConfigured() {
+        return !!(data.config.githubToken && String(data.config.githubToken).trim());
+      }
+
+      function persist(opts = {}) {
+        data.updatedAt = new Date().toISOString();
+        if (!opts.keepRev) data.rev = (Number(data.rev) || 0) + 1;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        if (syncConfigured()) {
+          syncMeta.pending = true;
+          saveSyncMeta(syncMeta);
+          updateSyncLabel();
+          schedulePush();
+        } else {
+          // Sin Gist: solo local. No marcar pendiente ni intentar subir.
+          syncMeta.pending = false;
+          saveSyncMeta(syncMeta);
+          updateSyncLabel();
+        }
+      }
+
+      function updateSyncLabel() {
+        if (!syncConfigured()) {
+          sync.level = "";
+          sync.label = "Guardado local";
+          sync.detail = "Los cambios se guardan en este dispositivo. Configura un token de GitHub para sincronizar entre equipos.";
+          return;
+        }
+        if (!navigator.onLine) {
+          sync.level = "warn";
+          sync.label = syncMeta.pending ? "Sin conexión, pendiente" : "Sin conexión";
+          sync.detail = "Los cambios se guardan en este dispositivo.";
+          return;
+        }
+        if (syncMeta.pending) {
+          sync.level = "warn";
+          sync.label = "Pendiente de subir";
+          sync.detail = "Hay cambios locales por sincronizar.";
+        } else if (syncMeta.lastSyncAt) {
+          const t = new Date(syncMeta.lastSyncAt);
+          sync.level = "ok";
+          sync.label = "Sincronizado " + t.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+          sync.detail = "";
+        } else {
+          sync.level = "";
+          sync.label = "Guardado local";
+          sync.detail = "Aún no sincronizado con Gist.";
+        }
+      }
+
+      function schedulePush() {
+        if (!syncConfigured()) return;
+        clearTimeout(syncTimer);
+        syncTimer = setTimeout(() => pushToGist(), 2000);
+      }
+
+      async function gistHeaders() {
+        return {
+          Accept: "application/vnd.github+json",
+          Authorization: "Bearer " + data.config.githubToken,
+          "X-GitHub-Api-Version": "2022-11-28",
+          "Content-Type": "application/json",
+        };
+      }
+
+      async function fetchRemoteGist() {
+        if (!data.config.githubToken || !data.config.gistId) return null;
+        const res = await fetch("https://api.github.com/gists/" + data.config.gistId, { headers: await gistHeaders() });
+        if (res.status === 401 || res.status === 403) throw new Error("Token inválido o sin permiso gist.");
+        if (res.status === 404) throw new Error("Gist no encontrado. Borra el Gist ID para crear uno nuevo.");
+        if (!res.ok) throw new Error("Error al leer Gist (" + res.status + ")");
+        const gist = await res.json();
+        const file = gist.files?.[GIST_FILENAME];
+        if (!file) return null;
+        let content = file.content;
+        if (file.truncated && file.raw_url) {
+          const raw = await fetch(file.raw_url);
+          content = await raw.text();
+        }
+        return JSON.parse(content);
+      }
+
+      async function createGist(payload) {
+        const res = await fetch("https://api.github.com/gists", {
+          method: "POST",
+          headers: await gistHeaders(),
+          body: JSON.stringify({
+            description: "HomeFinder Monterrey backup",
+            public: false,
+            files: { [GIST_FILENAME]: { content: JSON.stringify(payload, null, 2) } },
+          }),
+        });
+        if (!res.ok) throw new Error("No se pudo crear el Gist (" + res.status + ")");
+        const gist = await res.json();
+        data.config.gistId = gist.id;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        return gist.id;
+      }
+
+      async function pushToGist(force = false) {
+        if (!syncConfigured()) {
+          updateSyncLabel();
+          return;
+        }
+        if (!navigator.onLine) {
+          updateSyncLabel();
+          scheduleRetry();
+          return;
+        }
+        sync.level = "busy";
+        sync.label = "Sincronizando";
+        sync.detail = "Subiendo cambios…";
+        try {
+          if (!data.config.gistId) {
+            await createGist(JSON.parse(JSON.stringify(data)));
+            syncMeta.knownRev = data.rev;
+            syncMeta.pending = false;
+            syncMeta.lastSyncAt = new Date().toISOString();
+            saveSyncMeta(syncMeta);
+            retryAttempt = 0;
+            updateSyncLabel();
+            return;
+          }
+          const remote = await fetchRemoteGist();
+          if (remote && !force) {
+            const remoteRev = Number(remote.rev) || 0;
+            if (syncMeta.knownRev != null && remoteRev !== syncMeta.knownRev && remoteRev !== data.rev) {
+              openConflict(remote);
+              sync.level = "warn";
+              sync.label = "Conflicto";
+              sync.detail = "Hay una versión remota distinta.";
+              return;
+            }
+            if (remoteRev > data.rev && syncMeta.pending) {
+              openConflict(remote);
+              sync.level = "warn";
+              sync.label = "Conflicto";
+              sync.detail = "Hay una versión remota distinta.";
+              return;
+            }
+          }
+          const res = await fetch("https://api.github.com/gists/" + data.config.gistId, {
+            method: "PATCH",
+            headers: await gistHeaders(),
+            body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(data, null, 2) } } }),
+          });
+          if (!res.ok) throw new Error("Error al subir (" + res.status + ")");
+          syncMeta.knownRev = data.rev;
+          syncMeta.pending = false;
+          syncMeta.lastSyncAt = new Date().toISOString();
+          saveSyncMeta(syncMeta);
+          retryAttempt = 0;
+          updateSyncLabel();
+        } catch (e) {
+          sync.level = "err";
+          sync.label = "Error de sincronización";
+          sync.detail = e.message || String(e);
+          scheduleRetry();
+        }
+      }
+
+      function openConflict(remote) {
+        conflict.value = {
+          remote,
+          localMeta: `Rev ${data.rev} · ${data.properties.length} props · ${data.appointments.length} citas · ${new Date(data.updatedAt).toLocaleString("es-MX")}`,
+          remoteMeta: `Rev ${remote.rev} · ${(remote.properties || []).length} props · ${(remote.appointments || []).length} citas · ${new Date(remote.updatedAt || 0).toLocaleString("es-MX")}`,
+        };
+      }
+
+      function resolveConflict(choice) {
+        if (!conflict.value) return;
+        const remote = conflict.value.remote;
+        if (choice === "local") {
+          backups.value = pushBackup(remote, "Remoto descartado en conflicto");
+          conflict.value = null;
+          pushToGist(true);
+        } else {
+          backups.value = pushBackup(JSON.parse(JSON.stringify(data)), "Local descartado en conflicto");
+          applyRemote(remote);
+          conflict.value = null;
+          syncMeta.pending = false;
+          syncMeta.knownRev = data.rev;
+          syncMeta.lastSyncAt = new Date().toISOString();
+          saveSyncMeta(syncMeta);
+          sync.level = "ok";
+          updateSyncLabel();
+        }
+      }
+
+      function applyRemote(remote) {
+        const migrated = migrate(remote);
+        data.rev = migrated.rev;
+        data.updatedAt = migrated.updatedAt;
+        data.properties.splice(0, data.properties.length, ...(migrated.properties || []));
+        data.advisors.splice(0, data.advisors.length, ...(migrated.advisors || []));
+        data.appointments.splice(0, data.appointments.length, ...(migrated.appointments || []));
+        Object.assign(data.config, migrated.config);
+        Object.assign(data.config.ponderaciones, migrated.config.ponderaciones || {});
+        Object.assign(data.config.trabajo, migrated.config.trabajo || {});
+        Object.assign(data.config.apiUsage, migrated.config.apiUsage || {});
+        data.config.dias.splice(0, data.config.dias.length, ...(migrated.config.dias || []));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        if (data.config.mapsKey) ensureMaps();
+      }
+
+      async function pullFromGist(opts = {}) {
+        if (!data.config.githubToken || !data.config.gistId) return;
+        if (!navigator.onLine) return;
+        try {
+          const remote = await fetchRemoteGist();
+          if (!remote) return;
+          const remoteRev = Number(remote.rev) || 0;
+          if (remoteRev === data.rev) {
+            syncMeta.knownRev = remoteRev;
+            saveSyncMeta(syncMeta);
+            return;
+          }
+          if (syncMeta.pending && remoteRev !== syncMeta.knownRev) {
+            openConflict(remote);
+            return;
+          }
+          if (!syncMeta.pending && remoteRev > (syncMeta.knownRev ?? -1)) {
+            applyRemote(remote);
+            syncMeta.knownRev = data.rev;
+            syncMeta.lastSyncAt = new Date().toISOString();
+            saveSyncMeta(syncMeta);
+            sync.level = "ok";
+            updateSyncLabel();
+            if (!opts.silent) toast("Datos actualizados desde Gist", "ok");
+            return;
+          }
+          if (opts.force) {
+            if (syncMeta.pending) openConflict(remote);
+            else {
+              applyRemote(remote);
+              syncMeta.knownRev = data.rev;
+              saveSyncMeta(syncMeta);
+              toast("Descarga forzada aplicada", "ok");
+            }
+          }
+        } catch (e) {
+          if (!opts.silent) {
+            sync.level = "err";
+            sync.label = "Error de sincronización";
+            sync.detail = e.message || String(e);
+          }
+        }
+      }
+
+      function scheduleRetry() {
+        clearTimeout(retryTimer);
+        const delays = [5000, 15000, 60000];
+        const delay = delays[Math.min(retryAttempt, delays.length - 1)];
+        retryAttempt++;
+        retryTimer = setTimeout(() => pushToGist(), delay);
+      }
+
+      function retrySync() {
+        if (!syncConfigured()) {
+          updateSyncLabel();
+          toast("Configura un token de GitHub para sincronizar", "err");
+          return;
+        }
+        sync.level = "busy";
+        sync.label = "Sincronizando";
+        sync.detail = "Reintentando…";
+        if (syncMeta.pending) pushToGist();
+        else pullFromGist({ silent: false }).finally(() => {
+          if (sync.level === "busy") updateSyncLabel();
+        });
+      }
+      function forcePull() {
+        if (!syncConfigured()) { toast("Configura un token de GitHub primero", "err"); return; }
+        if (!data.config.gistId) { toast("Aún no hay Gist. Usa Forzar subida primero.", "err"); return; }
+        pullFromGist({ force: true });
+      }
+      function forcePush() {
+        if (!syncConfigured()) { toast("Configura un token de GitHub primero", "err"); return; }
+        pushToGist(true);
+      }
+
+      /* ---------- Computed ---------- */
+      const filteredProperties = computed(() => {
+        const q = (propFilter.q || "").toLowerCase().trim();
+        return data.properties.filter((p) => {
+          if (propFilter.estado && p.estado !== propFilter.estado) return false;
+          if (propFilter.perros && p.perros?.acepta !== propFilter.perros) return false;
+          if (q && !(p.alias || "").toLowerCase().includes(q) && !(p.colonia || "").toLowerCase().includes(q)) return false;
+          return true;
+        });
+      });
+      const eligibleProperties = computed(() => data.properties.filter((p) => p.estado !== "Descartada"));
+      const discardedProperties = computed(() => data.properties.filter((p) => p.estado === "Descartada"));
+
+      const stats = computed(() => ({
+        total: data.properties.length,
+        contactPending: data.properties.filter((p) => ["Por revisar", "Interesante", "Contacto pendiente"].includes(p.estado)).length,
+        apptRequested: data.appointments.filter((a) => a.estado === "Solicitada").length,
+        apptConfirmed: data.appointments.filter((a) => a.estado === "Confirmada" || a.estado === "Reprogramada").length,
+        visited: data.properties.filter((p) => p.estado === "Visitada").length,
+        favorites: data.properties.filter((p) => p.favorita || p.estado === "Favorita").length,
+        discarded: discardedProperties.value.length,
+      }));
+
+      const upcomingAppts = computed(() => {
+        return [...data.appointments]
+          .filter((a) => a.estado !== "Cancelada" && a.estado !== "Realizada")
+          .sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora))
+          .slice(0, 6);
+      });
+      const pendingConfirm = computed(() => data.appointments.filter((a) => a.estado === "Por solicitar" || a.estado === "Solicitada"));
+      const advisorFollowups = computed(() => data.advisors.filter((a) => a.proximoSeguimiento).sort((a, b) => a.proximoSeguimiento.localeCompare(b.proximoSeguimiento)).slice(0, 5));
+
+      function enrichScore(p) {
+        const pre = scoreEval(p, "pre", data.config.ponderaciones);
+        const post = scoreEval(p, "post", data.config.ponderaciones);
+        const visited = p.estado === "Visitada" || p.estado === "Favorita" || post.score != null;
+        const usePost = rankSort.value === "post" || (rankSort.value === "auto" && visited && post.score != null);
+        const usePre = rankSort.value === "pre" || (rankSort.value === "auto" && !usePost);
+        return {
+          ...p,
+          _pre: pre.score, _prePct: pre.pct, _post: post.score, _postPct: post.pct,
+          _score: usePost ? post.score : pre.score,
+          _scoreKind: usePost ? "Presencial" : (pre.score != null ? "Preliminar" : null),
+        };
+      }
+
+      const rankedProperties = computed(() => {
+        let list = data.properties.map(enrichScore);
+        if (rankOnlyEligible.value) list = list.filter((p) => p.estado !== "Descartada");
+        list.sort((a, b) => {
+          if (rankSort.value === "precio") return totalMensual(a) - totalMensual(b);
+          if (rankSort.value === "trabajo") return (a.trasladoTrabajo?.min ?? 9999) - (b.trasladoTrabajo?.min ?? 9999);
+          if (rankSort.value === "colonia") return (a.colonia || "").localeCompare(b.colonia || "");
+          return (b._score ?? -1) - (a._score ?? -1);
+        });
+        return list;
+      });
+      const top5 = computed(() => rankedProperties.value.filter((p) => p.estado !== "Descartada").slice(0, 5));
+      const compareProps = computed(() => compareIds.value.map((id) => data.properties.find((p) => p.id === id)).filter(Boolean));
+      const weightsSum = computed(() => Object.values(data.config.ponderaciones).reduce((s, n) => s + (Number(n) || 0), 0));
+
+      const dayAppts = computed(() => {
+        return data.appointments
+          .filter((a) => a.fecha === agendaDay.value && a.estado !== "Cancelada")
+          .sort((a, b) => a.hora.localeCompare(b.hora));
+      });
+      const dayConflicts = computed(() => {
+        const list = dayAppts.value;
+        const msgs = [];
+        for (let i = 0; i < list.length; i++) {
+          for (let j = i + 1; j < list.length; j++) {
+            const a = list[i], b = list[j];
+            const a0 = timeToMin(a.hora), a1 = a0 + (a.duracion || 45);
+            const b0 = timeToMin(b.hora), b1 = b0 + (b.duracion || 45);
+            if (a0 < b1 && b0 < a1) msgs.push(`${propName(a.propertyId)} vs ${propName(b.propertyId)}`);
+          }
+        }
+        return msgs;
+      });
+
+      /* ---------- Property ops ---------- */
+      function propOf(id) { return data.properties.find((p) => p.id === id); }
+      function propName(id) { return propOf(id)?.alias || "Propiedad"; }
+      function advisorOf(p) { return data.advisors.find((a) => a.id === (typeof p === "string" ? p : p?.advisorId)); }
+      function advisorName(id) { return data.advisors.find((a) => a.id === id)?.nombre || "—"; }
+      function propsOfAdvisor(id) { return data.properties.filter((p) => p.advisorId === id); }
+      function apptsOf(pid) { return data.appointments.filter((a) => a.propertyId === pid).sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora)); }
+
+      function openQuickAdd() { Object.assign(quickForm, { alias: "", colonia: "", renta: null, enlace: "" }); modals.quickAdd = true; }
+      function saveQuickAdd() {
+        if (!quickForm.alias && !quickForm.colonia) { toast("Agrega al menos un alias o colonia", "err"); return; }
+        const p = newProperty({
+          alias: quickForm.alias || (quickForm.colonia ? "Casa " + quickForm.colonia : "Nueva propiedad"),
+          colonia: quickForm.colonia,
+          enlace: quickForm.enlace,
+          costos: { ...newProperty().costos, renta: quickForm.renta },
+        });
+        data.properties.unshift(p);
+        persist();
+        modals.quickAdd = false;
+        toast("Propiedad registrada", "ok");
+        openProperty(p.id);
+      }
+
+      function openProperty(id) {
+        const p = propOf(id);
+        if (!p) return;
+        // Ensure nested structures
+        if (!p.costos) p.costos = newProperty().costos;
+        if (!p.fisicas) p.fisicas = newProperty().fisicas;
+        if (!p.espacios) p.espacios = newProperty().espacios;
+        if (!p.amenidades) p.amenidades = newProperty().amenidades;
+        if (!p.amenidades.items) p.amenidades.items = {};
+        if (!p.perros) p.perros = newProperty().perros;
+        if (!p.requisitos) p.requisitos = { items: defaultReqs(), duracionContrato: "", condiciones: "" };
+        if (!p.evaluacion) p.evaluacion = newProperty().evaluacion;
+        if (!p.evaluacion.pre.scores) p.evaluacion.pre.scores = emptyScores();
+        if (!p.evaluacion.post.scores) p.evaluacion.post.scores = emptyScores();
+        if (!p.servicios) p.servicios = {};
+        if (!p.travelCache) p.travelCache = {};
+        editingProp.value = p;
+        propTab.value = "resumen";
+        Object.assign(manualTravel, { min: p.trasladoTrabajo?.min ?? null, km: p.trasladoTrabajo?.km ?? null });
+        modals.property = true;
+        nextTick(() => { if (propTab.value === "ubicacion") renderPropMap(); });
+      }
+      function closeProperty() { modals.property = false; editingProp.value = null; }
+      function saveEditingProp() {
+        if (!editingProp.value) return;
+        const idx = data.properties.findIndex((p) => p.id === editingProp.value.id);
+        if (idx >= 0) data.properties[idx] = editingProp.value;
+        persist();
+      }
+      function onPropTab(id) {
+        nextTick(() => {
+          const root = propTabsEl.value;
+          const btn = root?.querySelector?.(`.tab[data-tab="${id}"]`);
+          btn?.scrollIntoView?.({ inline: "center", block: "nearest", behavior: "smooth" });
+          if (id === "ubicacion" && mapsReady.value) renderPropMap();
+        });
+      }
+      function mapQuery(p) {
+        if (!p) return "";
+        if (p.lat != null && p.lng != null) return `${p.lat},${p.lng}`;
+        return [p.direccion, p.colonia, "Monterrey Nuevo León"].filter(Boolean).join(", ");
+      }
+      function duplicateProp(p) {
+        const copy = JSON.parse(JSON.stringify(p));
+        copy.id = uid();
+        copy.alias = (p.alias || "Propiedad") + " (copia)";
+        copy.createdAt = new Date().toISOString();
+        data.properties.unshift(copy);
+        persist();
+        toast("Propiedad duplicada", "ok");
+        openProperty(copy.id);
+      }
+      function deleteProp(id) {
+        if (!confirm("¿Eliminar esta propiedad?")) return;
+        data.properties = data.properties.filter((p) => p.id !== id);
+        data.appointments = data.appointments.filter((a) => a.propertyId !== id);
+        persist();
+        closeProperty();
+        toast("Eliminada");
+      }
+      function changeEstado(p, estado) {
+        if (estado === "Descartada" && p.estado !== "Descartada") {
+          discardForm.propertyId = p.id;
+          discardForm.motivo = "decision";
+          discardForm.nota = "";
+          modals.discard = true;
+          return;
+        }
+        if (estado !== "Descartada" && p.estado === "Descartada") {
+          p.descarte = null;
+        }
+        p.estado = estado;
+        if (estado === "Favorita") p.favorita = true;
+        persist();
+        if (editingProp.value?.id === p.id) editingProp.value.estado = estado;
+      }
+      function confirmDiscard() {
+        const p = propOf(discardForm.propertyId);
+        if (!p) return;
+        p.descarte = {
+          motivo: discardForm.motivo,
+          nota: discardForm.nota,
+          fecha: new Date().toISOString().slice(0, 10),
+          estadoPrevio: p.estado === "Descartada" ? (p.descarte?.estadoPrevio || "Por revisar") : p.estado,
+        };
+        p.estado = "Descartada";
+        persist();
+        modals.discard = false;
+        toast("Propiedad descartada");
+      }
+      function onPerrosChange() {
+        const p = editingProp.value;
+        if (!p) return;
+        if (p.perros.acepta === "no") {
+          if (p.estado !== "Descartada") {
+            p.descarte = {
+              motivo: "mascotas",
+              nota: "No acepta ambos perros",
+              fecha: new Date().toISOString().slice(0, 10),
+              estadoPrevio: p.estado,
+            };
+            p.estado = "Descartada";
+          } else if (!p.descarte) {
+            p.descarte = { motivo: "mascotas", nota: "No acepta ambos perros", fecha: new Date().toISOString().slice(0, 10), estadoPrevio: "Por revisar" };
+          }
+        } else if (p.estado === "Descartada" && p.descarte?.motivo === "mascotas") {
+          p.estado = p.descarte.estadoPrevio || "Por revisar";
+          p.descarte = null;
+          toast("Descarte por mascotas revertido", "ok");
+        }
+        saveEditingProp();
+      }
+      function setTri(obj, key, val) { obj[key] = val; saveEditingProp(); }
+      function setScore(kind, key, n) {
+        editingProp.value.evaluacion[kind].scores[key] = n;
+        saveEditingProp();
+      }
+      function addPhotoUrl() {
+        if (!photoUrl.value.trim()) return;
+        editingProp.value.fotos = editingProp.value.fotos || [];
+        editingProp.value.fotos.push({ url: photoUrl.value.trim(), thumb: photoUrl.value.trim() });
+        photoUrl.value = "";
+        saveEditingProp();
+      }
+      function addCustomReq() {
+        if (!newReqName.value.trim()) return;
+        editingProp.value.requisitos.items.push({
+          id: uid(), nombre: newReqName.value.trim(), estado: "pendiente", costo: null, fechaLimite: "", notas: "", custom: true,
+        });
+        newReqName.value = "";
+        saveEditingProp();
+      }
+      function removeReq(id) {
+        editingProp.value.requisitos.items = editingProp.value.requisitos.items.filter((r) => r.id !== id);
+        saveEditingProp();
+      }
+      function reqProgress(p) {
+        const items = p?.requisitos?.items || [];
+        if (!items.length) return 0;
+        const relevant = items.filter((r) => r.estado !== "na" && r.estado !== "no_solicitado");
+        if (!relevant.length) return 0;
+        const done = relevant.filter((r) => r.estado === "cumplido").length;
+        return Math.round((done / relevant.length) * 100);
+      }
+      function toggleReqOpen(id) { openReqs[id] = !openReqs[id]; }
+      function tabBadge(p, id) {
+        if (!p) return "";
+        if (id === "costos") return totalMensual(p) ? "✓" : "";
+        if (id === "mascotas") return p.perros?.acepta === "si" ? "OK" : p.perros?.acepta === "no" ? "✕" : "?";
+        if (id === "requisitos") {
+          const pct = reqProgress(p);
+          return pct ? pct + "%" : "";
+        }
+        if (id === "ubicacion") return p.trasladoTrabajo?.min != null ? p.trasladoTrabajo.min + "m" : (p.lat != null ? "✓" : "");
+        if (id === "eval") {
+          const pre = scoreEval(p, "pre", data.config.ponderaciones).score;
+          const post = scoreEval(p, "post", data.config.ponderaciones).score;
+          const s = post ?? pre;
+          return s != null ? s.toFixed(1) : "";
+        }
+        if (id === "citas") {
+          const n = apptsOf(p.id).length;
+          return n ? String(n) : "";
+        }
+        return "";
+      }
+      function quickNewAdvisor() {
+        const nombre = prompt("Nombre del asesor:");
+        if (!nombre || !nombre.trim()) return;
+        const whatsapp = prompt("WhatsApp o teléfono (opcional):") || "";
+        const ad = newAdvisor({ nombre: nombre.trim(), whatsapp: whatsapp.trim(), telefono: whatsapp.trim() });
+        data.advisors.push(ad);
+        if (editingProp.value) {
+          editingProp.value.advisorId = ad.id;
+          saveEditingProp();
+        } else persist();
+        toast("Asesor creado y asignado", "ok");
+      }
+
+      /* ---------- Advisors ---------- */
+      function openAdvisorForm(ad) {
+        Object.assign(advisorForm, ad ? JSON.parse(JSON.stringify(ad)) : newAdvisor());
+        modals.advisor = true;
+      }
+      function saveAdvisor() {
+        if (!advisorForm.nombre.trim()) { toast("Nombre requerido", "err"); return; }
+        const idx = data.advisors.findIndex((a) => a.id === advisorForm.id);
+        if (idx >= 0) data.advisors[idx] = JSON.parse(JSON.stringify(advisorForm));
+        else data.advisors.push(JSON.parse(JSON.stringify(advisorForm)));
+        persist();
+        modals.advisor = false;
+        toast("Asesor guardado", "ok");
+      }
+      function deleteAdvisor(id) {
+        if (!confirm("¿Eliminar asesor?")) return;
+        data.advisors = data.advisors.filter((a) => a.id !== id);
+        data.properties.forEach((p) => { if (p.advisorId === id) p.advisorId = ""; });
+        persist();
+        modals.advisor = false;
+      }
+      function addAdvisorNote(ad) {
+        const texto = prompt("Nota de conversación:");
+        if (!texto) return;
+        ad.bitacora = ad.bitacora || [];
+        ad.bitacora.unshift({ fecha: new Date().toISOString().slice(0, 10), texto, pendiente: false });
+        ad.ultimoContacto = new Date().toISOString().slice(0, 10);
+        persist();
+      }
+
+      /* ---------- Appointments ---------- */
+      function openApptForm(a) {
+        const base = newAppt({
+          fecha: agendaDay.value,
+          duracion: data.config.duracionDefault || 45,
+        });
+        Object.assign(apptForm, a ? { ...base, ...JSON.parse(JSON.stringify(a)) } : base);
+        if (a?.propertyId && !a.id) apptForm.propertyId = a.propertyId;
+        if (apptForm.propertyId && !apptForm.advisorId) {
+          apptForm.advisorId = propOf(apptForm.propertyId)?.advisorId || "";
+        }
+        modals.appt = true;
+      }
+      function saveAppt() {
+        if (!apptForm.propertyId || !apptForm.fecha || !apptForm.hora) {
+          toast("Propiedad, fecha y hora son requeridos", "err"); return;
+        }
+        if (!apptForm.advisorId) apptForm.advisorId = propOf(apptForm.propertyId)?.advisorId || "";
+        const idx = data.appointments.findIndex((a) => a.id === apptForm.id);
+        const copy = JSON.parse(JSON.stringify(apptForm));
+        if (idx >= 0) data.appointments[idx] = copy;
+        else data.appointments.push(copy);
+        // Sync property estado lightly
+        const p = propOf(copy.propertyId);
+        if (p && p.estado !== "Descartada") {
+          if (copy.estado === "Confirmada" || copy.estado === "Reprogramada") p.estado = "Cita confirmada";
+          else if (copy.estado === "Solicitada" && !["Cita confirmada", "Visitada", "Favorita"].includes(p.estado)) p.estado = "Cita solicitada";
+          else if (copy.estado === "Realizada" && !["Favorita"].includes(p.estado)) p.estado = "Visitada";
+        }
+        persist();
+        modals.appt = false;
+        toast("Cita guardada", "ok");
+        nextTick(() => renderDayMap());
+      }
+      function deleteAppt(id) {
+        if (!confirm("¿Eliminar cita?")) return;
+        data.appointments = data.appointments.filter((a) => a.id !== id);
+        persist();
+        modals.appt = false;
+      }
+
+      function apptClass(a) {
+        if (a.estado === "Confirmada" || a.estado === "Reprogramada") return "confirmed";
+        if (a.estado === "Solicitada") return "solicitada";
+        return "tentative";
+      }
+      function apptBadgeClass(estado) {
+        if (estado === "Confirmada" || estado === "Reprogramada" || estado === "Realizada") return "badge-ok";
+        if (estado === "Solicitada") return "badge-info";
+        if (estado === "Cancelada") return "badge-danger";
+        return "";
+      }
+      function estadoBadge(e) {
+        if (e === "Descartada") return "badge-danger";
+        if (e === "Favorita" || e === "Visitada") return "badge-accent";
+        if (e === "Cita confirmada") return "badge-ok";
+        if (e === "Cita solicitada") return "badge-info";
+        return "";
+      }
+      function dayWindowLabel(fecha) {
+        const d = data.config.dias.find((x) => x.fecha === fecha);
+        if (!d) return "";
+        return `${d.label || ""} · ${d.desde} – ${d.hasta}`;
+      }
+
+      /* ---------- Travel cache helpers ---------- */
+      function travelKey(aId, bId) { return aId + "→" + bId; }
+      function getTravel(fromId, toId) {
+        // Check property travelCache on from
+        const from = typeof fromId === "object" ? fromId : propOf(fromId);
+        const to = typeof toId === "object" ? toId : propOf(toId);
+        if (!from || !to) return null;
+        const key = travelKey(from.id, to.id);
+        return from.travelCache?.[key] || to.travelCache?.[travelKey(to.id, from.id)] || null;
+      }
+      function travelBetween(a, b) {
+        const pa = propOf(a.propertyId), pb = propOf(b.propertyId);
+        if (!pa || !pb) return null;
+        return getTravel(pa, pb);
+      }
+      function setTravel(from, to, info) {
+        from.travelCache = from.travelCache || {};
+        from.travelCache[travelKey(from.id, to.id)] = info;
+      }
+
+      /* ---------- Maps ---------- */
+      function ensureMaps() {
+        const key = data.config.mapsKey;
+        if (!key) { mapsReady.value = false; return Promise.resolve(false); }
+        if (window.google?.maps) { mapsReady.value = true; return Promise.resolve(true); }
+        if (mapsScriptPromise) return mapsScriptPromise;
+        mapsLoading.value = true;
+        mapsScriptPromise = new Promise((resolve) => {
+          const s = document.createElement("script");
+          s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&libraries=places,marker&loading=async`;
+          s.async = true;
+          s.onload = () => { mapsReady.value = true; mapsLoading.value = false; resolve(true); };
+          s.onerror = () => { mapsReady.value = false; mapsLoading.value = false; toast("No se pudo cargar Google Maps", "err"); resolve(false); };
+          document.head.appendChild(s);
+        });
+        return mapsScriptPromise;
+      }
+      function onMapsKeyChange() {
+        persist();
+        mapsScriptPromise = null;
+        ensureMaps();
+      }
+      function bumpUsage(kind) {
+        data.config.apiUsage = data.config.apiUsage || { geocoding: 0, routes: 0, places: 0 };
+        data.config.apiUsage[kind] = (data.config.apiUsage[kind] || 0) + 1;
+        persist({ keepRev: true });
+        // still bump rev lightly — actually keepRev skips? Let's just persist normally without double
+      }
+
+      async function renderPropMap() {
+        if (!mapsReady.value && !data.config.mapsKey) return;
+        await ensureMaps();
+        await nextTick();
+        const el = propMapEl.value;
+        if (!el || !window.google?.maps || !editingProp.value) return;
+        const p = editingProp.value;
+        const center = (p.lat != null) ? { lat: p.lat, lng: p.lng } : { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng };
+        propMap = new google.maps.Map(el, { center, zoom: p.lat != null ? 15 : 12, mapTypeControl: false, streetViewControl: false });
+        propMarker = new google.maps.Marker({
+          map: propMap, position: center, draggable: true, title: p.alias,
+        });
+        propMarker.addListener("dragend", () => {
+          const pos = propMarker.getPosition();
+          p.lat = +pos.lat().toFixed(6);
+          p.lng = +pos.lng().toFixed(6);
+          saveEditingProp();
+          toast("Ubicación actualizada", "ok");
+        });
+      }
+
+      async function toggleOverviewMap() {
+        showOverviewMap.value = !showOverviewMap.value;
+        if (showOverviewMap.value) nextTick(() => renderOverviewMap());
+      }
+      async function renderOverviewMap() {
+        await ensureMaps();
+        await nextTick();
+        const el = overviewMapEl.value;
+        if (!el) return;
+        if (!window.google?.maps) {
+          el.innerHTML = `<div class="map-fallback"><p>Configura Google Maps en Ajustes.</p></div>`;
+          return;
+        }
+        overviewMarkers.forEach((m) => m.setMap(null));
+        overviewMarkers = [];
+        const pts = data.properties.filter((p) => p.lat != null);
+        const center = pts[0] ? { lat: pts[0].lat, lng: pts[0].lng } : { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng };
+        overviewMap = new google.maps.Map(el, { center, zoom: 11, mapTypeControl: false, streetViewControl: false });
+        const bounds = new google.maps.LatLngBounds();
+        const color = (estado) => {
+          if (estado === "Descartada") return "#b91c1c";
+          if (estado === "Favorita" || estado === "Visitada") return "#0f766e";
+          if (estado === "Cita confirmada") return "#15803d";
+          return "#1d4ed8";
+        };
+        pts.forEach((p) => {
+          const m = new google.maps.Marker({
+            map: overviewMap,
+            position: { lat: p.lat, lng: p.lng },
+            title: p.alias,
+            icon: {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: color(p.estado),
+              fillOpacity: 1,
+              strokeColor: "#fff",
+              strokeWeight: 2,
+            },
+          });
+          m.addListener("click", () => openProperty(p.id));
+          overviewMarkers.push(m);
+          bounds.extend(m.getPosition());
+        });
+        // work marker
+        new google.maps.Marker({
+          map: overviewMap,
+          position: { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng },
+          title: "Trabajo (Tec)",
+          label: "T",
+        });
+        if (pts.length) overviewMap.fitBounds(bounds);
+      }
+
+      async function renderDayMap() {
+        await ensureMaps();
+        await nextTick();
+        const el = dayMapEl.value;
+        if (!el || view.value !== "agenda" || agendaMode.value !== "day") return;
+        if (!window.google?.maps) {
+          el.innerHTML = `<div class="map-fallback"><p>Configura Google Maps en Ajustes.</p></div>`;
+          return;
+        }
+        dayMarkers.forEach((m) => m.setMap(null));
+        dayMarkers = [];
+        const pts = dayAppts.value.map((a) => propOf(a.propertyId)).filter((p) => p?.lat != null);
+        const center = pts[0] ? { lat: pts[0].lat, lng: pts[0].lng } : { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng };
+        dayMap = new google.maps.Map(el, { center, zoom: 12, mapTypeControl: false, streetViewControl: false });
+        const bounds = new google.maps.LatLngBounds();
+        pts.forEach((p, i) => {
+          const m = new google.maps.Marker({ map: dayMap, position: { lat: p.lat, lng: p.lng }, label: String(i + 1), title: p.alias });
+          dayMarkers.push(m);
+          bounds.extend(m.getPosition());
+        });
+        if (pts.length > 1) dayMap.fitBounds(bounds);
+      }
+
+      async function geocodeProp() {
+        const p = editingProp.value;
+        if (!p) return;
+        const q = [p.direccion, p.colonia, "Monterrey", "Nuevo León", "México"].filter(Boolean).join(", ");
+        if (!q) { toast("Agrega dirección o colonia", "err"); return; }
+        await ensureMaps();
+        if (!window.google?.maps) return;
+        mapsBusy.value = true;
+        try {
+          const geocoder = new google.maps.Geocoder();
+          const result = await new Promise((resolve, reject) => {
+            geocoder.geocode({ address: q }, (results, status) => {
+              if (status === "OK" && results[0]) resolve(results[0]);
+              else reject(new Error(status));
+            });
+          });
+          data.config.apiUsage.geocoding = (data.config.apiUsage.geocoding || 0) + 1;
+          const loc = result.geometry.location;
+          p.lat = +loc.lat().toFixed(6);
+          p.lng = +loc.lng().toFixed(6);
+          if (!p.direccion) p.direccion = result.formatted_address;
+          saveEditingProp();
+          renderPropMap();
+          toast("Ubicación encontrada", "ok");
+        } catch (e) {
+          toast("No se pudo geocodificar: " + e.message, "err");
+        } finally { mapsBusy.value = false; }
+      }
+
+      async function computeRouteMatrix(origins, destinations, departureTime) {
+        const key = data.config.mapsKey;
+        if (!key) throw new Error("Falta API key de Maps");
+        const body = {
+          origins: origins.map((o) => ({ waypoint: { location: { latLng: { latitude: o.lat, longitude: o.lng } } } })),
+          destinations: destinations.map((d) => ({ waypoint: { location: { latLng: { latitude: d.lat, longitude: d.lng } } } })),
+          travelMode: "DRIVE",
+          routingPreference: departureTime ? "TRAFFIC_AWARE" : "TRAFFIC_UNAWARE",
+          languageCode: "es-MX",
+          units: "METRIC",
+        };
+        if (departureTime) body.departureTime = departureTime;
+        const res = await fetch("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": key,
+            "X-Goog-FieldMask": "originIndex,destinationIndex,duration,distanceMeters,status,condition",
+          },
+          body: JSON.stringify(body),
+        });
+        data.config.apiUsage.routes = (data.config.apiUsage.routes || 0) + 1;
+        const txt = await res.text();
+        if (!res.ok) throw new Error("Routes API: " + res.status + " " + txt.slice(0, 160));
+        // computeRouteMatrix returns NDJSON (one JSON object per line)
+        const rows = txt.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
+        return rows;
+      }
+
+      async function calcWorkTravel() {
+        const p = editingProp.value;
+        if (!p || p.lat == null) { toast("Ubica la propiedad primero", "err"); return; }
+        mapsBusy.value = true;
+        try {
+          const rows = await computeRouteMatrix(
+            [{ lat: p.lat, lng: p.lng }],
+            [{ lat: data.config.trabajo.lat, lng: data.config.trabajo.lng }]
+          );
+          const row = rows.find((r) => !r.error && (r.duration || r.distanceMeters)) || rows[0];
+          if (!row || row.error) throw new Error(row?.error?.message || "Sin ruta disponible");
+          const secs = Number(String(row.duration || "").replace("s", "")) || 0;
+          p.trasladoTrabajo = {
+            min: Math.round(secs / 60),
+            km: row.distanceMeters ? +(row.distanceMeters / 1000).toFixed(1) : null,
+            fuente: "real",
+            fecha: new Date().toISOString(),
+          };
+          saveEditingProp();
+          Object.assign(manualTravel, { min: p.trasladoTrabajo.min, km: p.trasladoTrabajo.km });
+          toast("Traslado al Tec calculado", "ok");
+        } catch (e) {
+          toast(e.message || "Error Routes API", "err");
+        } finally { mapsBusy.value = false; persist(); }
+      }
+
+      function saveManualTravel() {
+        const p = editingProp.value;
+        if (!p) return;
+        p.trasladoTrabajo = {
+          min: manualTravel.min, km: manualTravel.km, fuente: "manual", fecha: new Date().toISOString(),
+        };
+        saveEditingProp();
+        toast("Traslado manual guardado", "ok");
+      }
+
+      async function calcDayTravel(fecha) {
+        const appts = data.appointments.filter((a) => a.fecha === fecha && a.estado !== "Cancelada");
+        const props = [...new Map(appts.map((a) => [a.propertyId, propOf(a.propertyId)]).filter(([, p]) => p?.lat != null)).values()];
+        if (props.length < 2) { toast("Se necesitan al menos 2 propiedades ubicadas", "err"); return; }
+        mapsBusy.value = true;
+        try {
+          const rows = await computeRouteMatrix(props, props);
+          const list = Array.isArray(rows) ? rows : [];
+          for (const r of list) {
+            if (r.originIndex === r.destinationIndex) continue;
+            const from = props[r.originIndex], to = props[r.destinationIndex];
+            if (!from || !to) continue;
+            const secs = Number(String(r.duration || "").replace("s", "")) || 0;
+            setTravel(from, to, {
+              min: Math.round(secs / 60),
+              km: r.distanceMeters ? +(r.distanceMeters / 1000).toFixed(1) : null,
+              fuente: "real",
+              fecha: new Date().toISOString(),
+            });
+          }
+          persist();
+          toast("Traslados del día calculados", "ok");
+        } catch (e) {
+          toast(e.message || "Error Routes API", "err");
+        } finally { mapsBusy.value = false; }
+      }
+
+      async function searchNearby(p, type) {
+        await ensureMaps();
+        if (!window.google?.maps || p.lat == null) throw new Error("Mapa o ubicación no disponibles");
+        const service = new google.maps.places.PlacesService(document.createElement("div"));
+        const result = await new Promise((resolve, reject) => {
+          service.nearbySearch({
+            location: { lat: p.lat, lng: p.lng },
+            radius: 2000,
+            type,
+          }, (results, status) => {
+            if (status === google.maps.places.PlacesServiceStatus.OK && results?.length) resolve(results[0]);
+            else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) resolve(null);
+            else reject(new Error(status));
+          });
+        });
+        data.config.apiUsage.places = (data.config.apiUsage.places || 0) + 1;
+        if (!result) return null;
+        const dist = haversineKm(p, { lat: result.geometry.location.lat(), lng: result.geometry.location.lng() });
+        return {
+          nombre: result.name,
+          distanciaKm: dist != null ? +dist.toFixed(2) : null,
+          distanciaTexto: dist != null ? dist.toFixed(1) + " km (aprox. lineal)" : "",
+          fuente: "real",
+          fecha: new Date().toISOString(),
+        };
+      }
+
+      async function searchBasicPlaces() {
+        const p = editingProp.value;
+        if (!p || p.lat == null) { toast("Ubica la propiedad primero", "err"); return; }
+        mapsBusy.value = true;
+        try {
+          for (const cat of PLACE_CATS.filter((c) => c.basic)) {
+            const info = await searchNearby(p, cat.type);
+            if (info) {
+              p.servicios = p.servicios || {};
+              p.servicios[cat.key] = info;
+            }
+          }
+          saveEditingProp();
+          persist();
+          toast("Servicios básicos consultados", "ok");
+        } catch (e) { toast(e.message, "err"); }
+        finally { mapsBusy.value = false; }
+      }
+      async function searchOnePlace(cat) {
+        const p = editingProp.value;
+        if (!p || p.lat == null) { toast("Ubica la propiedad primero", "err"); return; }
+        mapsBusy.value = true;
+        try {
+          const info = await searchNearby(p, cat.type);
+          p.servicios = p.servicios || {};
+          if (info) p.servicios[cat.key] = info;
+          else toast("Sin resultados para " + cat.label);
+          saveEditingProp();
+          persist();
+        } catch (e) { toast(e.message, "err"); }
+        finally { mapsBusy.value = false; }
+      }
+
+      function openInMaps(p) {
+        if (!p) return;
+        const q = mapQuery(p);
+        if (!q) { toast("Agrega dirección, colonia o coordenadas primero", "err"); return; }
+        window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`, "_blank");
+      }
+      function navigateTo(p) {
+        if (!p) return;
+        const dest = mapQuery(p);
+        if (!dest) { toast("Agrega dirección, colonia o coordenadas primero", "err"); return; }
+        window.open(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}`, "_blank");
+      }
+
+      /* ---------- WhatsApp ---------- */
+      function openWhatsApp(phone, text) {
+        if (!phone) { toast("Sin número de WhatsApp", "err"); return; }
+        const num = String(phone).replace(/\D/g, "");
+        const url = `https://wa.me/${num}${text ? "?text=" + encodeURIComponent(text) : ""}`;
+        window.open(url, "_blank");
+      }
+      function whatsappForProp(p) {
+        const ad = advisorOf(p);
+        if (!ad) { toast("Sin asesor asignado", "err"); return; }
+        const msg = `Hola ${ad.nombre}, te escribo por la propiedad "${p.alias}" en ${p.colonia || "Monterrey"}${p.enlace ? " (" + p.enlace + ")" : ""}. ¿Sigue disponible? Me gustaría agendar una visita.`;
+        openWhatsApp(ad.whatsapp || ad.telefono, msg);
+      }
+      function whatsappForAppt(a) {
+        const p = propOf(a.propertyId);
+        const ad = data.advisors.find((x) => x.id === (a.advisorId || p?.advisorId));
+        if (!ad) { toast("Sin asesor", "err"); return; }
+        const msg = `Hola ${ad.nombre}, confirmo la visita a "${p?.alias}" el ${formatDay(a.fecha)} a las ${a.hora}. ¿Nos vemos ahí?`;
+        openWhatsApp(ad.whatsapp || ad.telefono, msg);
+      }
+
+      /* ---------- Planner ---------- */
+      function runPlanner() {
+        plannerBusy.value = true;
+        plannerResult.value = null;
+        try {
+          const fecha = agendaDay.value;
+          const day = data.config.dias.find((d) => d.fecha === fecha);
+          if (!day) { toast("Día no configurado", "err"); return; }
+          const margen = data.config.margen || 15;
+          const durDefault = data.config.duracionDefault || 45;
+          const existing = data.appointments.filter((a) => a.fecha === fecha && a.estado !== "Cancelada" && a.estado !== "Realizada");
+          const fixed = existing.filter((a) => a.estado === "Confirmada" || a.estado === "Reprogramada");
+          const semi = existing.filter((a) => a.estado === "Solicitada");
+          const freeAppts = existing.filter((a) => a.estado === "Por solicitar");
+
+          const occupiedIds = new Set(existing.map((a) => a.propertyId));
+          const candidates = eligibleProperties.value
+            .filter((p) => !occupiedIds.has(p.id) && (p.estado === "Interesante" || p.estado === "Contactado" || p.estado === "Cita solicitada" || p.favorita || p.estado === "Contacto pendiente"))
+            .map((p) => enrichScore(p))
+            .sort((a, b) => (b._score ?? -1) - (a._score ?? -1) || (b.favorita ? 1 : 0) - (a.favorita ? 1 : 0));
+
+          const zones = assignZones(data.properties);
+          const zoneOf = (pid) => zones.find((z) => z.ids.includes(pid))?.id;
+
+          // Build fixed timeline
+          const slots = [];
+          const warnings = [];
+          const suggestions = [];
+          const changes = [];
+
+          function placeFixed(a, label, kind) {
+            const p = propOf(a.propertyId);
+            slots.push({
+              key: a.id, apptId: a.id, propertyId: a.propertyId, hora: a.hora,
+              duracion: a.duracion || durDefault, alias: p?.alias, colonia: p?.colonia,
+              label, kind, zona: zoneOf(a.propertyId), travelMissing: false, fixed: true,
+            });
+          }
+          fixed.forEach((a) => placeFixed(a, "Confirmada (fija)", "confirmed"));
+          semi.forEach((a) => placeFixed(a, "Solicitada (semifija)", "solicitada"));
+
+          // Keep free appts but allow reschedule
+          const movable = freeAppts.map((a) => ({ appt: a, prop: propOf(a.propertyId) })).filter((x) => x.prop);
+          const newCandidates = candidates.map((p) => ({ appt: null, prop: p }));
+          const pool = [...movable, ...newCandidates];
+
+          // Sort pool by zone clustering around fixed points
+          const anchors = [...fixed, ...semi].map((a) => propOf(a.propertyId)).filter((p) => p?.lat != null);
+
+          function priority(item) {
+            const p = item.prop;
+            let score = (enrichScore(p)._score ?? 0) * 10;
+            if (p.favorita) score += 5;
+            if (anchors.length && p.lat != null) {
+              const near = Math.min(...anchors.map((a) => haversineKm(a, p) ?? 99));
+              score += Math.max(0, 5 - near);
+            }
+            return score;
+          }
+          pool.sort((a, b) => priority(b) - priority(a));
+
+          const dayStart = timeToMin(day.desde);
+          const dayEnd = timeToMin(day.hasta);
+
+          function occupiedRanges() {
+            return slots.map((s) => {
+              const start = timeToMin(s.hora);
+              return { start, end: start + s.duracion + margen, slot: s };
+            }).sort((a, b) => a.start - b.start);
+          }
+
+          function findGap(dur, preferAfterProp) {
+            const ranges = occupiedRanges();
+            let cursor = dayStart;
+            const gaps = [];
+            for (const r of ranges) {
+              if (r.start - cursor >= dur + margen) gaps.push({ start: cursor, end: r.start });
+              cursor = Math.max(cursor, r.end);
+            }
+            if (dayEnd - cursor >= dur) gaps.push({ start: cursor, end: dayEnd });
+
+            if (!gaps.length) return null;
+
+            // Prefer gap near preferAfterProp
+            if (preferAfterProp?.lat != null) {
+              // score gaps by travel from nearest neighbor at gap edges — use haversine only for ordering preference of gap, NOT as time
+              gaps.sort((g1, g2) => {
+                // prefer earlier gaps that are geographically near: use zone heuristic via last slot before gap
+                return g1.start - g2.start;
+              });
+            }
+            for (const g of gaps) {
+              let start = g.start;
+              // If there's a previous slot, need travel time
+              const prev = occupiedRanges().filter((r) => r.end <= start + margen).pop();
+              if (prev) {
+                const prevProp = propOf(prev.slot.propertyId);
+                const travel = preferAfterProp && prevProp ? getTravel(prevProp, preferAfterProp) : null;
+                if (preferAfterProp && prevProp) {
+                  if (!travel) {
+                    // cannot schedule tightly without data — leave visible hole at this gap start
+                    return { start, travelMissing: true, prevId: prevProp.id };
+                  }
+                  start = Math.max(start, prev.start + prev.slot.duracion + travel.min + margen);
+                } else {
+                  start = Math.max(start, prev.end);
+                }
+              }
+              if (start + dur <= g.end && start + dur <= dayEnd) {
+                return { start, travelMissing: false };
+              }
+            }
+            return null;
+          }
+
+          for (const item of pool) {
+            const dur = item.appt?.duracion || durDefault;
+            const gap = findGap(dur, item.prop);
+            if (!gap) {
+              warnings.push(`Sin espacio para ${item.prop.alias}`);
+              continue;
+            }
+            const hora = minToTime(gap.start);
+            slots.push({
+              key: "new-" + item.prop.id,
+              apptId: item.appt?.id || null,
+              propertyId: item.prop.id,
+              hora, duracion: dur,
+              alias: item.prop.alias, colonia: item.prop.colonia,
+              label: item.appt ? "Reubicada (libre)" : "Nueva propuesta",
+              kind: "tentative",
+              zona: zoneOf(item.prop.id),
+              travelMissing: gap.travelMissing,
+              fixed: false,
+            });
+            changes.push({
+              type: item.appt ? "update" : "create",
+              apptId: item.appt?.id || null,
+              propertyId: item.prop.id,
+              fecha, hora, duracion: dur,
+            });
+          }
+
+          slots.sort((a, b) => a.hora.localeCompare(b.hora));
+
+          // Mark travel missing between consecutive
+          for (let i = 0; i < slots.length - 1; i++) {
+            const a = propOf(slots[i].propertyId), b = propOf(slots[i + 1].propertyId);
+            if (a && b && !getTravel(a, b) && a.lat != null && b.lat != null) {
+              slots[i + 1].travelMissing = true;
+            }
+          }
+
+          // Suggestions for semi-fixed if nearby free slot would be better geographically
+          for (const s of semi) {
+            const p = propOf(s.propertyId);
+            if (!p?.lat) continue;
+            const neighbors = slots.filter((x) => x.propertyId !== s.propertyId && propOf(x.propertyId)?.lat != null);
+            for (const n of neighbors) {
+              const np = propOf(n.propertyId);
+              const dist = haversineKm(p, np);
+              if (dist != null && dist < 2) {
+                const ideal = minToTime(timeToMin(n.hora) + (n.duracion || 45) + margen);
+                if (ideal !== s.hora) {
+                  const ad = data.advisors.find((x) => x.id === (s.advisorId || p.advisorId));
+                  suggestions.push({
+                    text: `Convendría pedir cambiar "${p.alias}" (ahora ${s.hora}) cerca de "${n.alias}" hacia las ${ideal}.`,
+                    whatsapp: ad?.whatsapp || ad?.telefono,
+                    message: `Hola ${ad?.nombre || ""}, ¿sería posible reagendar la visita a ${p.alias} alrededor de las ${ideal}? Estaré por la zona.`,
+                  });
+                  break;
+                }
+              }
+            }
+          }
+
+          if (slots.some((s) => s.travelMissing)) {
+            warnings.push("Hay tramos sin dato de traslado. Usa «Calcular traslados del día» o captura tiempos manuales.");
+          }
+
+          plannerResult.value = { slots, warnings, suggestions, changes, fecha };
+        } finally {
+          plannerBusy.value = false;
+        }
+      }
+
+      function applyPlanner() {
+        if (!plannerResult.value) return;
+        const { changes, fecha } = plannerResult.value;
+        for (const ch of changes) {
+          if (ch.type === "update" && ch.apptId) {
+            const a = data.appointments.find((x) => x.id === ch.apptId);
+            if (a) { a.hora = ch.hora; a.duracion = ch.duracion; }
+          } else if (ch.type === "create") {
+            data.appointments.push(newAppt({
+              propertyId: ch.propertyId,
+              advisorId: propOf(ch.propertyId)?.advisorId || "",
+              fecha, hora: ch.hora, duracion: ch.duracion, estado: "Por solicitar",
+            }));
+          }
+        }
+        persist();
+        plannerResult.value = null;
+        agendaMode.value = "day";
+        toast("Propuesta aplicada. Confirma con los asesores.", "ok");
+        nextTick(() => renderDayMap());
+      }
+
+      /* ---------- Ranking compare ---------- */
+      function toggleCompare(id) {
+        const i = compareIds.value.indexOf(id);
+        if (i >= 0) compareIds.value.splice(i, 1);
+        else if (compareIds.value.length < 3) compareIds.value.push(id);
+      }
+      function fmtScore(s) { return s == null ? "—" : Number(s).toFixed(2); }
+
+      /* ---------- Settings ---------- */
+      function toggleSec(k) { secs[k] = !secs[k]; }
+      function addVisitDay() {
+        data.config.dias.push({ fecha: "", label: "Nuevo", desde: "09:00", hasta: "20:00" });
+        persist();
+      }
+      function exportBackup() {
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `homefinder-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+      }
+      function importBackup(ev) {
+        const file = ev.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const parsed = JSON.parse(reader.result);
+            backups.value = pushBackup(JSON.parse(JSON.stringify(data)), "Pre-importación");
+            applyRemote(parsed);
+            syncMeta.pending = true;
+            saveSyncMeta(syncMeta);
+            persist();
+            toast("Respaldo importado", "ok");
+          } catch (e) { toast("JSON inválido", "err"); }
+        };
+        reader.readAsText(file);
+        ev.target.value = "";
+      }
+      function restoreBackup(i) {
+        const b = backups.value[i];
+        if (!b || !confirm("¿Restaurar este respaldo? Se guardará una copia del estado actual.")) return;
+        backups.value = pushBackup(JSON.parse(JSON.stringify(data)), "Pre-restauración");
+        applyRemote(b.data);
+        syncMeta.pending = true;
+        saveSyncMeta(syncMeta);
+        persist();
+        toast("Respaldo restaurado", "ok");
+      }
+
+      /* ---------- AI ---------- */
+      function buildContext() {
+        const lines = [];
+        lines.push(`Fecha actual del sistema: ${new Date().toISOString()}`);
+        lines.push(`Punto de trabajo: ${data.config.trabajo.nombre}`);
+        lines.push(`Presupuesto: ${data.config.presupuesto ?? "no definido"}`);
+        lines.push(`Días de visita: ${data.config.dias.map((d) => `${d.fecha} ${d.desde}-${d.hasta}`).join("; ")}`);
+        lines.push("\nPROPIEDADES:");
+        for (const p of data.properties) {
+          const pre = scoreEval(p, "pre", data.config.ponderaciones);
+          const post = scoreEval(p, "post", data.config.ponderaciones);
+          lines.push(`- [${p.id}] ${p.alias} | colonia=${p.colonia} | estado=${p.estado} | renta=${p.costos?.renta} | totalMes=${totalMensual(p)} | amueblado=${p.amueblado} | perros=${p.perros?.acepta} | descarte=${p.descarte ? p.descarte.motivo : "no"} | alTec=${p.trasladoTrabajo?.min ?? "Sin dato"}min(${p.trasladoTrabajo?.fuente || ""}) | pre=${pre.score?.toFixed(2) ?? "Sin evaluar"}(${pre.pct}%) | post=${post.score?.toFixed(2) ?? "Sin evaluar"}(${post.pct}%) | jardin=${p.espacios?.jardin} | favorita=${p.favorita} | asesor=${advisorName(p.advisorId)}`);
+        }
+        lines.push("\nASESORES:");
+        for (const a of data.advisors) {
+          lines.push(`- [${a.id}] ${a.nombre} | ${a.inmobiliaria} | wa=${a.whatsapp || a.telefono} | seguimiento=${a.proximoSeguimiento || "—"} | pendientes=${(a.bitacora || []).filter((b) => b.pendiente).length}`);
+        }
+        lines.push("\nCITAS:");
+        for (const a of data.appointments) {
+          lines.push(`- [${a.id}] ${a.fecha} ${a.hora} ${a.duracion}min | ${propName(a.propertyId)} | estado=${a.estado} | notas=${a.notas || ""}`);
+        }
+        return lines.join("\n");
+      }
+
+      async function askAI(messages) {
+        const key = data.config.openaiKey;
+        if (!key) throw new Error("Configura tu API key de OpenAI en Ajustes.");
+        const model = data.config.openaiModel || "gpt-4o-mini";
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + key },
+          body: JSON.stringify({ model, temperature: 0.3, messages }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error?.message || "OpenAI error " + res.status);
+        }
+        const json = await res.json();
+        return json.choices?.[0]?.message?.content || "";
+      }
+
+      async function sendAI() {
+        const text = aiInput.value.trim();
+        if (!text) return;
+        aiMessages.value.push({ role: "user", content: text });
+        aiInput.value = "";
+        aiBusy.value = true;
+        await nextTick();
+        if (aiMsgs.value) aiMsgs.value.scrollTop = aiMsgs.value.scrollHeight;
+        try {
+          const system = `Eres el asistente de HomeFinder, una app personal para buscar casa en renta en Monterrey.
+Debes basarte SOLO en el contexto de registros proporcionado.
+Distingue claramente: **Registrado**, **Por confirmar** y **Sugerencia**.
+No inventes datos faltantes.
+Si propones cambios (citas, estados), añade al final un bloque JSON así:
+\`\`\`acciones
+[{"type":"create_appt|update_appt|set_estado","descripcion":"...","payload":{...}}]
+\`\`\`
+Contexto:\n${buildContext()}`;
+          const history = aiMessages.value.filter((m) => m.role !== "system").slice(-12).map((m) => ({ role: m.role, content: m.content }));
+          const content = await askAI([{ role: "system", content: system }, ...history]);
+          aiMessages.value.push({ role: "assistant", content });
+          const match = content.match(/```acciones\s*([\s\S]*?)```/);
+          if (match) {
+            try { pendingActions.value = JSON.parse(match[1]); }
+            catch { pendingActions.value = []; }
+          } else pendingActions.value = [];
+        } catch (e) {
+          aiMessages.value.push({ role: "assistant", content: "Error: " + e.message });
+        } finally {
+          aiBusy.value = false;
+          await nextTick();
+          if (aiMsgs.value) aiMsgs.value.scrollTop = aiMsgs.value.scrollHeight;
+        }
+      }
+
+      function applyAIActions() {
+        for (const a of pendingActions.value) {
+          const p = a.payload || {};
+          if (a.type === "set_estado" && p.propertyId && p.estado) {
+            const prop = propOf(p.propertyId);
+            if (prop) changeEstado(prop, p.estado);
+          } else if (a.type === "create_appt") {
+            data.appointments.push(newAppt({
+              propertyId: p.propertyId, fecha: p.fecha, hora: p.hora,
+              duracion: p.duracion || data.config.duracionDefault, estado: p.estado || "Por solicitar", notas: p.notas || "",
+            }));
+            persist();
+          } else if (a.type === "update_appt" && p.id) {
+            const ap = data.appointments.find((x) => x.id === p.id);
+            if (ap) { Object.assign(ap, p); persist(); }
+          }
+        }
+        pendingActions.value = [];
+        toast("Acciones aplicadas", "ok");
+      }
+
+      function openPasteAd() {
+        pasteText.value = "";
+        extractForm.value = null;
+        modals.pasteAd = true;
+      }
+      async function extractAd() {
+        aiBusy.value = true;
+        try {
+          const content = await askAI([
+            {
+              role: "system",
+              content: `Extrae datos de un anuncio inmobiliario de Monterrey. Responde SOLO un JSON válido con estas claves (usa null si no aparece en el texto; NUNCA inventes): alias, colonia, direccion, renta, mantenimiento, deposito, recamaras, banos, estacionamiento, m2Const, amueblado (sin|semi|full|pc), perros (si|no|pc), jardin (si|no|pc), terraza (si|no|pc), enlace, observaciones. Sin markdown.`,
+            },
+            { role: "user", content: pasteText.value },
+          ]);
+          const json = JSON.parse(content.replace(/```json|```/g, "").trim());
+          extractForm.value = {
+            alias: json.alias || "",
+            colonia: json.colonia || "",
+            direccion: json.direccion || "",
+            renta: json.renta ?? null,
+            mantenimiento: json.mantenimiento ?? null,
+            recamaras: json.recamaras ?? null,
+            banos: json.banos ?? null,
+            estacionamiento: json.estacionamiento ?? null,
+            amueblado: json.amueblado || "pc",
+            perros: json.perros || "pc",
+            enlace: json.enlace || "",
+            observaciones: json.observaciones || "",
+            jardin: json.jardin || "pc",
+            terraza: json.terraza || "pc",
+            deposito: json.deposito ?? null,
+            m2Const: json.m2Const ?? null,
+          };
+        } catch (e) {
+          toast("No se pudo extraer: " + e.message, "err");
+        } finally { aiBusy.value = false; }
+      }
+      function saveExtracted() {
+        const f = extractForm.value;
+        if (!f) return;
+        const p = newProperty({
+          alias: f.alias || (f.colonia ? "Casa " + f.colonia : "Desde anuncio"),
+          colonia: f.colonia, direccion: f.direccion, enlace: f.enlace, observaciones: f.observaciones,
+          amueblado: f.amueblado,
+          costos: { ...newProperty().costos, renta: f.renta, mantenimiento: f.mantenimiento, deposito: f.deposito },
+          fisicas: { ...newProperty().fisicas, recamaras: f.recamaras, banos: f.banos, estacionamiento: f.estacionamiento, m2Const: f.m2Const },
+          espacios: { jardin: f.jardin || "pc", terraza: f.terraza || "pc", balcon: "pc" },
+          perros: { ...newProperty().perros, acepta: f.perros || "pc" },
+        });
+        if (p.perros.acepta === "no") {
+          p.estado = "Descartada";
+          p.descarte = { motivo: "mascotas", nota: "Extraído del anuncio", fecha: new Date().toISOString().slice(0, 10), estadoPrevio: "Por revisar" };
+        }
+        data.properties.unshift(p);
+        persist();
+        modals.pasteAd = false;
+        toast("Propiedad creada desde anuncio", "ok");
+        openProperty(p.id);
+      }
+
+      /* ---------- Watchers / lifecycle ---------- */
+      watch(agendaDay, () => { plannerResult.value = null; nextTick(() => renderDayMap()); });
+      watch(agendaMode, (m) => { if (m === "day") nextTick(() => renderDayMap()); });
+      watch(view, (v) => { if (v === "agenda") nextTick(() => renderDayMap()); });
+
+      onMounted(async () => {
+        if (!syncConfigured()) {
+          syncMeta.pending = false;
+          saveSyncMeta(syncMeta);
+        }
+        updateSyncLabel();
+        if (data.config.mapsKey) ensureMaps();
+        if (syncConfigured()) {
+          await pullFromGist({ silent: true });
+          if (syncMeta.pending) schedulePush();
+        }
+
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible" && syncConfigured()) pullFromGist({ silent: true });
+        });
+        window.addEventListener("keydown", (ev) => {
+          if (ev.key !== "Escape") return;
+          if (modals.discard) { modals.discard = false; return; }
+          if (modals.appt) { modals.appt = false; return; }
+          if (modals.advisor) { modals.advisor = false; return; }
+          if (modals.quickAdd) { modals.quickAdd = false; return; }
+          if (modals.pasteAd) { modals.pasteAd = false; return; }
+          if (showCompare.value) { showCompare.value = false; return; }
+          if (modals.property) { closeProperty(); return; }
+          if (aiOpen.value) { aiOpen.value = false; }
+        });
+        window.addEventListener("online", () => {
+          updateSyncLabel();
+          if (!syncConfigured()) return;
+          pullFromGist({ silent: true }).then(() => { if (syncMeta.pending) pushToGist(); });
+        });
+        window.addEventListener("offline", updateSyncLabel);
+        setInterval(() => {
+          if (!polling && navigator.onLine && syncConfigured() && data.config.gistId) {
+            polling = true;
+            pullFromGist({ silent: true }).finally(() => { polling = false; });
+          }
+        }, 60000);
+      });
+
+      return {
+        // const
+        PROPERTY_STATES, APPT_STATES, DIM_LABELS, AMENITY_KEYS, PLACE_CATS,
+        // state
+        data, view, navItems, sync, conflict, toasts, backups, modals,
+        quickForm, pasteText, extractForm, discardForm, apptForm, advisorForm,
+        editingProp, propTab, propTabs, photoUrl, newReqName, openReqs, manualTravel,
+        propFilter, agendaDay, agendaMode, plannerResult, plannerBusy,
+        rankSort, rankOnlyEligible, compareIds, showCompare, secs,
+        mapsReady, mapsBusy, propMapEl, propTabsEl, dayMapEl, overviewMapEl, showOverviewMap,
+        aiOpen, aiInput, aiMessages, aiBusy, pendingActions, aiMsgs,
+        // computed
+        filteredProperties, eligibleProperties, discardedProperties, stats,
+        upcomingAppts, pendingConfirm, advisorFollowups, rankedProperties, top5,
+        compareProps, weightsSum, dayAppts, dayConflicts,
+        // methods
+        money, totalMensual, desembolsoInicial, reqCosts, amuebladoLabel, descarteLabel,
+        formatDay, formatDayShort, scoreEval, fmtScore, persist,
+        openQuickAdd, saveQuickAdd, openProperty, closeProperty, saveEditingProp, onPropTab,
+        duplicateProp, deleteProp, changeEstado, confirmDiscard, onPerrosChange,
+        setTri, setScore, addPhotoUrl, addCustomReq, removeReq, reqProgress, toggleReqOpen, tabBadge, quickNewAdvisor,
+        propOf, propName, advisorOf, advisorName, propsOfAdvisor, apptsOf,
+        openAdvisorForm, saveAdvisor, deleteAdvisor, addAdvisorNote,
+        openApptForm, saveAppt, deleteAppt, apptClass, apptBadgeClass, estadoBadge, dayWindowLabel,
+        travelBetween, calcDayTravel, calcWorkTravel, saveManualTravel, geocodeProp,
+        searchBasicPlaces, searchOnePlace, openInMaps, navigateTo, toggleOverviewMap, mapQuery,
+        openWhatsApp, whatsappForProp, whatsappForAppt,
+        runPlanner, applyPlanner, toggleCompare,
+        toggleSec, addVisitDay, exportBackup, importBackup, restoreBackup,
+        retrySync, forcePull, forcePush, resolveConflict, onMapsKeyChange,
+        sendAI, applyAIActions, openPasteAd, extractAd, saveExtracted,
+      };
+    },
+  }).mount("#app");
+})();
