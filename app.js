@@ -66,10 +66,38 @@
       id: uid(), nombre, estado: "no_solicitado", costo: null, fechaLimite: "", notas: "", custom: false,
     }));
   }
+  function formatDireccionMX(p) {
+    if (!p) return "";
+    const streetParts = [];
+    if (p.calle) {
+      let line = String(p.calle).trim();
+      if (p.numeroExt) line += " " + String(p.numeroExt).trim();
+      if (p.numeroInt) line += " Int. " + String(p.numeroInt).trim();
+      streetParts.push(line);
+    }
+    if (p.colonia) streetParts.push("Col. " + String(p.colonia).trim());
+    if (p.municipio) streetParts.push(String(p.municipio).trim());
+    const estado = String(p.estadoMx || "Nuevo León").trim() || "Nuevo León";
+    streetParts.push(estado === "Nuevo León" ? "N.L." : estado);
+    if (p.cp) streetParts.push("C.P. " + String(p.cp).trim());
+    streetParts.push("México");
+    const composed = streetParts.filter(Boolean).join(", ");
+    if (composed && composed !== "N.L., México" && composed !== "Nuevo León, México") return composed;
+    return String(p.direccion || "").trim();
+  }
+  function syncDireccionFromMx(p) {
+    if (!p) return;
+    const composed = formatDireccionMX(p);
+    if (p.calle || p.colonia || p.municipio || p.cp) p.direccion = composed;
+  }
   function newProperty(partial = {}) {
     return {
       id: uid(),
-      alias: "", colonia: "", direccion: "", enlace: "", lat: null, lng: null,
+      alias: "",
+      calle: "", numeroExt: "", numeroInt: "",
+      colonia: "", municipio: "", estadoMx: "Nuevo León", cp: "",
+      direccion: "", enlace: "", lat: null, lng: null,
+      coloniaBounds: null,
       fotos: [], observaciones: "",
       costos: { renta: null, mantenimiento: null, serviciosIncluidos: "", otrosMensuales: null, deposito: null, otrosIniciales: null },
       fisicas: { recamaras: null, banos: null, mediosBanos: null, estacionamiento: null, m2Const: null, m2Terreno: null, plantas: null, conservacion: "", disponibilidad: "" },
@@ -137,6 +165,7 @@
       personaActiva: "Brandon",
       cloudinaryCloud: "",
       cloudinaryPreset: "",
+      placeCatsCustom: [],
     };
   }
   const AI_CHAT_MAX = 10;
@@ -225,15 +254,71 @@
     if (fuente === "subida") return "badge-ok";
     return "badge-info";
   }
+  function normalizeServicioItem(s) {
+    if (!s || typeof s !== "object") return null;
+    const lat = s.lat != null ? Number(s.lat) : null;
+    const lng = s.lng != null ? Number(s.lng) : null;
+    const min = s.min != null ? Number(s.min) : (s.durationMin != null ? Number(s.durationMin) : null);
+    let km = s.km != null ? Number(s.km) : null;
+    if (km == null && s.distanciaKm != null) km = Number(s.distanciaKm);
+    return {
+      id: s.id || uid(),
+      nombre: String(s.nombre || "Sin nombre"),
+      lat: Number.isFinite(lat) ? lat : null,
+      lng: Number.isFinite(lng) ? lng : null,
+      min: Number.isFinite(min) ? min : null,
+      km: Number.isFinite(km) ? km : null,
+      fuente: s.fuente === "manual" ? "manual" : "places",
+      measuredAt: s.measuredAt || s.fecha || "",
+    };
+  }
+  function normalizeServiciosMap(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (const [key, val] of Object.entries(raw)) {
+      if (Array.isArray(val)) {
+        out[key] = val.map(normalizeServicioItem).filter(Boolean).slice(0, 3);
+      } else if (val && typeof val === "object") {
+        // Formato viejo: un solo objeto por categoría
+        const one = normalizeServicioItem(val);
+        out[key] = one ? [one] : [];
+      }
+    }
+    return out;
+  }
+  function normalizePlaceCatCustom(c) {
+    if (!c || typeof c !== "object") return null;
+    const label = String(c.label || "").trim();
+    const query = String(c.query || c.label || "").trim();
+    if (!label || !query) return null;
+    return { id: c.id || uid(), label, query };
+  }
+  function normalizeColoniaBounds(b) {
+    if (!b || typeof b !== "object") return null;
+    const north = Number(b.north), south = Number(b.south), east = Number(b.east), west = Number(b.west);
+    if (![north, south, east, west].every(Number.isFinite)) return null;
+    return { north, south, east, west };
+  }
   function normalizeProperty(p) {
     if (!p || typeof p !== "object") return p;
     if (!p.registradoPor) p.registradoPor = "";
+    if (p.calle == null) p.calle = "";
+    if (p.numeroExt == null) p.numeroExt = "";
+    if (p.numeroInt == null) p.numeroInt = "";
+    if (p.municipio == null) p.municipio = "";
+    if (p.estadoMx == null || p.estadoMx === "") p.estadoMx = "Nuevo León";
+    if (p.cp == null) p.cp = "";
+    if (!p.calle && p.direccion && !String(p.direccion).startsWith("Col.")) {
+      // Datos viejos: conservar direccion libre; no forzar parseo
+    }
+    p.coloniaBounds = normalizeColoniaBounds(p.coloniaBounds);
     if (!p.vistos || typeof p.vistos !== "object") p.vistos = emptyVistos();
     if (p.vistos.Atziri === undefined) p.vistos.Atziri = null;
     if (p.vistos.Brandon === undefined) p.vistos.Brandon = null;
     if (!Array.isArray(p.comentarios)) p.comentarios = [];
     if (!Array.isArray(p.fotos)) p.fotos = [];
     else p.fotos = p.fotos.map(normalizePhoto).filter(Boolean);
+    p.servicios = normalizeServiciosMap(p.servicios);
     return p;
   }
   function normalizeAdvisor(a) {
@@ -255,6 +340,9 @@
         trabajo: { ...base.config.trabajo, ...(d.config?.trabajo || {}) },
         apiUsage: { ...base.config.apiUsage, ...(d.config?.apiUsage || {}) },
         personaActiva: PERSONAS.includes(d.config?.personaActiva) ? d.config.personaActiva : "Brandon",
+        placeCatsCustom: Array.isArray(d.config?.placeCatsCustom)
+          ? d.config.placeCatsCustom.map(normalizePlaceCatCustom).filter(Boolean)
+          : [],
       },
       properties,
       advisors,
@@ -382,7 +470,7 @@
       const mapsBusy = ref(false);
       const mapsLoading = ref(false);
       let mapsScriptPromise = null;
-      let propMap = null, propMarker = null, dayMap = null, dayMarkers = [];
+      let propMap = null, propMarker = null, propColoniaRect = null, dayMap = null, dayMarkers = [];
 
       const sync = reactive({ level: "ok", label: "Guardado local", detail: "" });
       const conflict = ref(null);
@@ -996,7 +1084,14 @@
       function mapQuery(p) {
         if (!p) return "";
         if (p.lat != null && p.lng != null) return `${p.lat},${p.lng}`;
-        return [p.direccion, p.colonia, "Monterrey Nuevo León"].filter(Boolean).join(", ");
+        const composed = formatDireccionMX(p);
+        if (composed) return composed;
+        return [p.direccion, p.colonia, "Monterrey", "Nuevo León"].filter(Boolean).join(", ");
+      }
+      function saveMxAddress() {
+        if (!editingProp.value) return;
+        syncDireccionFromMx(editingProp.value);
+        saveEditingProp();
       }
       function duplicateProp(p) {
         const copy = JSON.parse(JSON.stringify(p));
@@ -1549,7 +1644,20 @@
       }
 
       /* ---------- Appointments ---------- */
+      const apptMenuId = ref(null);
+      function toggleApptMenu(id) {
+        apptMenuId.value = apptMenuId.value === id ? null : id;
+      }
+      function editApptFromMenu(a) {
+        apptMenuId.value = null;
+        openApptForm(a);
+      }
+      function deleteApptFromMenu(id) {
+        apptMenuId.value = null;
+        deleteAppt(id);
+      }
       function openApptForm(a) {
+        apptMenuId.value = null;
         const base = newAppt({
           fecha: agendaDay.value,
           duracion: data.config.duracionDefault || 45,
@@ -1677,18 +1785,54 @@
         const el = propMapEl.value;
         if (!el || !window.google?.maps || !editingProp.value) return;
         const p = editingProp.value;
-        const center = (p.lat != null) ? { lat: p.lat, lng: p.lng } : { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng };
-        propMap = new google.maps.Map(el, { center, zoom: p.lat != null ? 15 : 12, mapTypeControl: false, streetViewControl: false });
-        propMarker = new google.maps.Marker({
-          map: propMap, position: center, draggable: true, title: p.alias,
+        if (propColoniaRect) { propColoniaRect.setMap(null); propColoniaRect = null; }
+        const hasPin = p.lat != null && p.lng != null;
+        const boundsObj = normalizeColoniaBounds(p.coloniaBounds);
+        const center = hasPin
+          ? { lat: p.lat, lng: p.lng }
+          : (boundsObj
+            ? { lat: (boundsObj.north + boundsObj.south) / 2, lng: (boundsObj.east + boundsObj.west) / 2 }
+            : { lat: data.config.trabajo.lat, lng: data.config.trabajo.lng });
+        propMap = new google.maps.Map(el, {
+          center,
+          zoom: hasPin ? 16 : (boundsObj ? 14 : 12),
+          mapTypeControl: false,
+          streetViewControl: false,
         });
-        propMarker.addListener("dragend", () => {
-          const pos = propMarker.getPosition();
-          p.lat = +pos.lat().toFixed(6);
-          p.lng = +pos.lng().toFixed(6);
-          saveEditingProp();
-          toast("Ubicación actualizada", "ok");
-        });
+        if (boundsObj) {
+          propColoniaRect = new google.maps.Rectangle({
+            map: propMap,
+            bounds: boundsObj,
+            strokeColor: "#0f766e",
+            strokeOpacity: 0.9,
+            strokeWeight: 2,
+            fillColor: "#0f766e",
+            fillOpacity: 0.18,
+            clickable: false,
+          });
+        }
+        if (hasPin) {
+          propMarker = new google.maps.Marker({
+            map: propMap, position: center, draggable: true, title: p.alias,
+          });
+          propMarker.addListener("dragend", () => {
+            const pos = propMarker.getPosition();
+            p.lat = +pos.lat().toFixed(6);
+            p.lng = +pos.lng().toFixed(6);
+            saveEditingProp();
+            toast("Ubicación actualizada", "ok");
+          });
+        } else {
+          propMarker = null;
+        }
+        if (boundsObj) {
+          const fit = new google.maps.LatLngBounds(
+            { lat: boundsObj.south, lng: boundsObj.west },
+            { lat: boundsObj.north, lng: boundsObj.east }
+          );
+          if (hasPin) fit.extend(center);
+          propMap.fitBounds(fit, 48);
+        }
       }
 
       async function toggleOverviewMap() {
@@ -1767,30 +1911,76 @@
         if (pts.length > 1) dayMap.fitBounds(bounds);
       }
 
+      function geocodeAddress(geocoder, address) {
+        return new Promise((resolve, reject) => {
+          geocoder.geocode({ address, region: "mx" }, (results, status) => {
+            if (status === "OK" && results[0]) resolve(results[0]);
+            else reject(new Error(status));
+          });
+        });
+      }
+      function boundsFromGeocodeResult(result) {
+        const vp = result?.geometry?.viewport || result?.geometry?.bounds;
+        if (!vp) return null;
+        const ne = vp.getNorthEast();
+        const sw = vp.getSouthWest();
+        return {
+          north: +ne.lat().toFixed(6),
+          east: +ne.lng().toFixed(6),
+          south: +sw.lat().toFixed(6),
+          west: +sw.lng().toFixed(6),
+        };
+      }
       async function geocodeProp() {
         const p = editingProp.value;
         if (!p) return;
-        const q = [p.direccion, p.colonia, "Monterrey", "Nuevo León", "México"].filter(Boolean).join(", ");
-        if (!q) { toast("Agrega dirección o colonia", "err"); return; }
+        syncDireccionFromMx(p);
+        const hasStreet = !!(String(p.calle || "").trim() || String(p.direccion || "").trim());
+        const hasColonia = !!String(p.colonia || "").trim();
+        if (!hasStreet && !hasColonia) {
+          toast("Agrega calle o colonia", "err");
+          return;
+        }
         await ensureMaps();
         if (!window.google?.maps) return;
         mapsBusy.value = true;
         try {
           const geocoder = new google.maps.Geocoder();
-          const result = await new Promise((resolve, reject) => {
-            geocoder.geocode({ address: q }, (results, status) => {
-              if (status === "OK" && results[0]) resolve(results[0]);
-              else reject(new Error(status));
-            });
-          });
-          data.config.apiUsage.geocoding = (data.config.apiUsage.geocoding || 0) + 1;
-          const loc = result.geometry.location;
-          p.lat = +loc.lat().toFixed(6);
-          p.lng = +loc.lng().toFixed(6);
-          if (!p.direccion) p.direccion = result.formatted_address;
+          const municipio = String(p.municipio || "").trim() || "Monterrey";
+          const estado = String(p.estadoMx || "Nuevo León").trim() || "Nuevo León";
+
+          if (hasColonia) {
+            const colQ = ["Colonia " + p.colonia, municipio, estado, "México"].join(", ");
+            const colRes = await geocodeAddress(geocoder, colQ);
+            data.config.apiUsage.geocoding = (data.config.apiUsage.geocoding || 0) + 1;
+            p.coloniaBounds = boundsFromGeocodeResult(colRes);
+            if (!hasStreet || !(String(p.calle || "").trim())) {
+              const loc = colRes.geometry.location;
+              p.lat = +loc.lat().toFixed(6);
+              p.lng = +loc.lng().toFixed(6);
+            }
+          }
+
+          if (String(p.calle || "").trim()) {
+            const addrQ = formatDireccionMX(p) || [p.calle, p.numeroExt, p.colonia, municipio, estado, "México"].filter(Boolean).join(", ");
+            const addrRes = await geocodeAddress(geocoder, addrQ);
+            data.config.apiUsage.geocoding = (data.config.apiUsage.geocoding || 0) + 1;
+            const loc = addrRes.geometry.location;
+            p.lat = +loc.lat().toFixed(6);
+            p.lng = +loc.lng().toFixed(6);
+          } else if (hasStreet && p.direccion && !p.calle) {
+            // Dirección libre antigua
+            const addrRes = await geocodeAddress(geocoder, [p.direccion, p.colonia, municipio, estado, "México"].filter(Boolean).join(", "));
+            data.config.apiUsage.geocoding = (data.config.apiUsage.geocoding || 0) + 1;
+            const loc = addrRes.geometry.location;
+            p.lat = +loc.lat().toFixed(6);
+            p.lng = +loc.lng().toFixed(6);
+          }
+
+          syncDireccionFromMx(p);
           saveEditingProp();
           renderPropMap();
-          toast("Ubicación encontrada", "ok");
+          toast(p.coloniaBounds ? "Ubicación y colonia en el mapa" : "Ubicación encontrada", "ok");
         } catch (e) {
           toast("No se pudo geocodificar: " + e.message, "err");
         } finally { mapsBusy.value = false; }
@@ -1820,8 +2010,15 @@
         data.config.apiUsage.routes = (data.config.apiUsage.routes || 0) + 1;
         const txt = await res.text();
         if (!res.ok) throw new Error("Routes API: " + res.status + " " + txt.slice(0, 160));
-        // computeRouteMatrix returns NDJSON (one JSON object per line)
-        const rows = txt.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
+        // REST returns a JSON array; some clients historically streamed NDJSON lines.
+        const trimmed = String(txt || "").trim();
+        let rows;
+        if (trimmed.startsWith("[")) {
+          rows = JSON.parse(trimmed);
+        } else {
+          rows = trimmed.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
+        }
+        if (!Array.isArray(rows)) rows = [rows];
         return rows;
       }
 
@@ -1837,15 +2034,18 @@
           const row = rows.find((r) => !r.error && (r.duration || r.distanceMeters)) || rows[0];
           if (!row || row.error) throw new Error(row?.error?.message || "Sin ruta disponible");
           const secs = Number(String(row.duration || "").replace("s", "")) || 0;
+          const measuredAt = new Date().toISOString();
+          // Routes API travelMode DRIVE → tiempo y km en carro (no lineal).
           p.trasladoTrabajo = {
             min: Math.round(secs / 60),
             km: row.distanceMeters ? +(row.distanceMeters / 1000).toFixed(1) : null,
-            fuente: "real",
-            fecha: new Date().toISOString(),
+            fuente: "carro",
+            fecha: measuredAt,
+            measuredAt,
           };
           saveEditingProp();
           Object.assign(manualTravel, { min: p.trasladoTrabajo.min, km: p.trasladoTrabajo.km });
-          toast("Traslado al Tec calculado", "ok");
+          toast("Traslado al Tec calculado (carro)", "ok");
         } catch (e) {
           toast(e.message || "Error Routes API", "err");
         } finally { mapsBusy.value = false; persist(); }
@@ -1854,11 +2054,31 @@
       function saveManualTravel() {
         const p = editingProp.value;
         if (!p) return;
+        const measuredAt = new Date().toISOString();
         p.trasladoTrabajo = {
-          min: manualTravel.min, km: manualTravel.km, fuente: "manual", fecha: new Date().toISOString(),
+          min: manualTravel.min,
+          km: manualTravel.km,
+          fuente: "manual",
+          fecha: measuredAt,
+          measuredAt,
         };
         saveEditingProp();
         toast("Traslado manual guardado", "ok");
+      }
+
+      function formatTrasladoMeasure(t) {
+        if (!t) return "";
+        const at = t.measuredAt || t.fecha;
+        if (!at) return "";
+        try {
+          const d = new Date(at);
+          if (Number.isNaN(d.getTime())) return "";
+          return "medido " + d.toLocaleString("es-MX", {
+            day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+          });
+        } catch {
+          return "";
+        }
       }
 
       async function calcDayTravel(fecha) {
@@ -1888,31 +2108,187 @@
         } finally { mapsBusy.value = false; }
       }
 
-      async function searchNearby(p, type) {
-        await ensureMaps();
-        if (!window.google?.maps || p.lat == null) throw new Error("Mapa o ubicación no disponibles");
-        const service = new google.maps.places.PlacesService(document.createElement("div"));
-        const result = await new Promise((resolve, reject) => {
-          service.nearbySearch({
-            location: { lat: p.lat, lng: p.lng },
-            radius: 2000,
-            type,
-          }, (results, status) => {
-            if (status === google.maps.places.PlacesServiceStatus.OK && results?.length) resolve(results[0]);
-            else if (status === google.maps.places.PlacesServiceStatus.ZERO_RESULTS) resolve(null);
-            else reject(new Error(status));
-          });
+      const customCatForm = reactive({ label: "", query: "" });
+
+      const allPlaceCats = computed(() => {
+        const fixed = PLACE_CATS.map((c) => ({
+          key: c.key,
+          label: c.label,
+          type: c.type,
+          basic: !!c.basic,
+          custom: false,
+          query: "",
+        }));
+        const custom = (data.config.placeCatsCustom || []).map((c) => ({
+          key: c.id,
+          label: c.label,
+          type: "",
+          basic: false,
+          custom: true,
+          query: c.query,
+        }));
+        return [...fixed, ...custom];
+      });
+
+      function serviciosOf(prop, catKey) {
+        const list = prop?.servicios?.[catKey];
+        return Array.isArray(list) ? list : [];
+      }
+
+      function formatServicioLine(s) {
+        if (!s) return "";
+        const parts = [];
+        if (s.min != null) parts.push(s.min + " min");
+        if (s.km != null) parts.push(s.km + " km");
+        if (s.measuredAt) {
+          try {
+            const d = new Date(s.measuredAt);
+            if (!Number.isNaN(d.getTime())) {
+              parts.push("medido " + d.toLocaleString("es-MX", {
+                day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+              }));
+            }
+          } catch { /* ignore */ }
+        }
+        return parts.join(" · ");
+      }
+
+      function openServicioRoute(prop, servicio) {
+        if (!prop || prop.lat == null || prop.lng == null) {
+          toast("Ubica la propiedad primero", "err");
+          return;
+        }
+        if (servicio?.lat == null || servicio?.lng == null) {
+          toast("Este resultado no tiene coordenadas; vuelve a buscar", "err");
+          return;
+        }
+        const origin = `${prop.lat},${prop.lng}`;
+        const dest = `${servicio.lat},${servicio.lng}`;
+        window.open(
+          `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(dest)}&travelmode=driving`,
+          "_blank"
+        );
+      }
+
+      async function fetchNearbyPlaces(p, type) {
+        const key = data.config.mapsKey;
+        if (!key) throw new Error("Falta API key de Maps");
+        const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": key,
+            "X-Goog-FieldMask": "places.displayName,places.location",
+          },
+          body: JSON.stringify({
+            includedTypes: [type],
+            maxResultCount: 3,
+            rankPreference: "DISTANCE",
+            languageCode: "es",
+            locationRestriction: {
+              circle: {
+                center: { latitude: Number(p.lat), longitude: Number(p.lng) },
+                radius: 2000.0,
+              },
+            },
+          }),
         });
         data.config.apiUsage.places = (data.config.apiUsage.places || 0) + 1;
-        if (!result) return null;
-        const dist = haversineKm(p, { lat: result.geometry.location.lat(), lng: result.geometry.location.lng() });
-        return {
-          nombre: result.name,
-          distanciaKm: dist != null ? +dist.toFixed(2) : null,
-          distanciaTexto: dist != null ? dist.toFixed(1) + " km (aprox. lineal)" : "",
-          fuente: "real",
-          fecha: new Date().toISOString(),
-        };
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error?.message || json.error_message || ("Places API " + res.status));
+        return Array.isArray(json.places) ? json.places : [];
+      }
+
+      async function fetchTextPlaces(p, query) {
+        const key = data.config.mapsKey;
+        if (!key) throw new Error("Falta API key de Maps");
+        const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": key,
+            "X-Goog-FieldMask": "places.displayName,places.location",
+          },
+          body: JSON.stringify({
+            textQuery: query,
+            maxResultCount: 3,
+            languageCode: "es",
+            locationBias: {
+              circle: {
+                center: { latitude: Number(p.lat), longitude: Number(p.lng) },
+                radius: 2000.0,
+              },
+            },
+          }),
+        });
+        data.config.apiUsage.places = (data.config.apiUsage.places || 0) + 1;
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error?.message || json.error_message || ("Places Text API " + res.status));
+        return Array.isArray(json.places) ? json.places : [];
+      }
+
+      function placesToCandidates(places) {
+        return (places || []).map((place) => {
+          const lat = place.location?.latitude;
+          const lng = place.location?.longitude;
+          if (lat == null || lng == null) return null;
+          return {
+            id: uid(),
+            nombre: place.displayName?.text || "Sin nombre",
+            lat: Number(lat),
+            lng: Number(lng),
+            min: null,
+            km: null,
+            fuente: "places",
+            measuredAt: "",
+          };
+        }).filter(Boolean).slice(0, 3);
+      }
+
+      async function enrichWithDriving(prop, candidates) {
+        if (!candidates.length) return [];
+        const measuredAt = new Date().toISOString();
+        try {
+          const rows = await computeRouteMatrix(
+            [{ lat: prop.lat, lng: prop.lng }],
+            candidates.map((c) => ({ lat: c.lat, lng: c.lng }))
+          );
+          const list = Array.isArray(rows) ? rows : [];
+          return candidates.map((c, i) => {
+            const row = list.find((r) => Number(r.destinationIndex) === i)
+              || list.find((r) => r.originIndex === 0 && r.destinationIndex === i)
+              || list[i];
+            const secs = Number(String(row?.duration || "").replace("s", "")) || 0;
+            const km = row?.distanceMeters != null ? +(row.distanceMeters / 1000).toFixed(1) : null;
+            return {
+              ...c,
+              min: secs ? Math.round(secs / 60) : null,
+              km,
+              measuredAt,
+            };
+          }).sort((a, b) => {
+            const am = a.min != null ? a.min : 9999;
+            const bm = b.min != null ? b.min : 9999;
+            return am - bm;
+          });
+        } catch (e) {
+          toast("Lugares encontrados, pero falló la ruta en carro: " + (e.message || "error"), "err");
+          return candidates.map((c) => ({ ...c, measuredAt }));
+        }
+      }
+
+      async function searchCategoryPlaces(prop, cat) {
+        if (!prop || prop.lat == null || prop.lng == null) throw new Error("Ubica la propiedad primero");
+        if (!data.config.mapsKey) throw new Error("Falta API key de Maps");
+        let places;
+        if (cat.custom) {
+          places = await fetchTextPlaces(prop, cat.query || cat.label);
+        } else {
+          places = await fetchNearbyPlaces(prop, cat.type);
+        }
+        const candidates = placesToCandidates(places);
+        if (!candidates.length) return [];
+        return enrichWithDriving(prop, candidates);
       }
 
       async function searchBasicPlaces() {
@@ -1920,12 +2296,10 @@
         if (!p || p.lat == null) { toast("Ubica la propiedad primero", "err"); return; }
         mapsBusy.value = true;
         try {
-          for (const cat of PLACE_CATS.filter((c) => c.basic)) {
-            const info = await searchNearby(p, cat.type);
-            if (info) {
-              p.servicios = p.servicios || {};
-              p.servicios[cat.key] = info;
-            }
+          p.servicios = p.servicios || {};
+          for (const cat of allPlaceCats.value.filter((c) => c.basic)) {
+            const items = await searchCategoryPlaces(p, cat);
+            p.servicios[cat.key] = items;
           }
           saveEditingProp();
           persist();
@@ -1933,19 +2307,45 @@
         } catch (e) { toast(e.message, "err"); }
         finally { mapsBusy.value = false; }
       }
+
       async function searchOnePlace(cat) {
         const p = editingProp.value;
         if (!p || p.lat == null) { toast("Ubica la propiedad primero", "err"); return; }
         mapsBusy.value = true;
         try {
-          const info = await searchNearby(p, cat.type);
+          const items = await searchCategoryPlaces(p, cat);
           p.servicios = p.servicios || {};
-          if (info) p.servicios[cat.key] = info;
-          else toast("Sin resultados para " + cat.label);
+          p.servicios[cat.key] = items;
+          if (!items.length) toast("Sin resultados para " + cat.label);
+          else toast(cat.label + ": " + items.length + " cercanos", "ok");
           saveEditingProp();
           persist();
         } catch (e) { toast(e.message, "err"); }
         finally { mapsBusy.value = false; }
+      }
+
+      function addCustomPlaceCat() {
+        const label = String(customCatForm.label || "").trim();
+        const query = String(customCatForm.query || label).trim();
+        if (!label) { toast("Escribe un nombre para la categoría", "err"); return; }
+        if (!query) { toast("Escribe el texto de búsqueda", "err"); return; }
+        if (!Array.isArray(data.config.placeCatsCustom)) data.config.placeCatsCustom = [];
+        data.config.placeCatsCustom.push({ id: uid(), label, query });
+        customCatForm.label = "";
+        customCatForm.query = "";
+        persist();
+        toast("Categoría agregada", "ok");
+      }
+
+      function removeCustomPlaceCat(id) {
+        if (!id || !confirm("¿Eliminar esta categoría personalizada?")) return;
+        data.config.placeCatsCustom = (data.config.placeCatsCustom || []).filter((c) => c.id !== id);
+        if (editingProp.value?.servicios) {
+          delete editingProp.value.servicios[id];
+          saveEditingProp();
+        } else {
+          persist();
+        }
       }
 
       function openInMaps(p) {
@@ -2524,6 +2924,8 @@ Contexto:\n${buildContext()}`;
             alias: json.alias || "",
             colonia: json.colonia || "",
             direccion: json.direccion || "",
+            calle: json.calle || json.direccion || "",
+            municipio: json.municipio || "",
             renta: json.renta ?? null,
             mantenimiento: json.mantenimiento ?? null,
             recamaras: json.recamaras ?? null,
@@ -2548,7 +2950,12 @@ Contexto:\n${buildContext()}`;
         if (!f) return;
         const p = newProperty({
           alias: f.alias || (f.colonia ? "Casa " + f.colonia : "Desde anuncio"),
-          colonia: f.colonia, direccion: f.direccion, enlace: f.enlace, observaciones: f.observaciones,
+          colonia: f.colonia,
+          calle: f.calle || "",
+          municipio: f.municipio || "",
+          direccion: f.direccion || "",
+          enlace: f.enlace,
+          observaciones: f.observaciones,
           amueblado: f.amueblado,
           registradoPor: f.registradoPor || data.config.personaActiva || "Brandon",
           costos: { ...newProperty().costos, renta: f.renta, mantenimiento: f.mantenimiento, deposito: f.deposito },
@@ -2556,6 +2963,8 @@ Contexto:\n${buildContext()}`;
           espacios: { jardin: f.jardin || "pc", terraza: f.terraza || "pc", balcon: "pc" },
           perros: { ...newProperty().perros, acepta: f.perros || "pc" },
         });
+        if (!p.calle && p.direccion) p.calle = p.direccion;
+        syncDireccionFromMx(p);
         if (p.perros.acepta === "no") {
           p.estado = "Descartada";
           p.descarte = { motivo: "mascotas", nota: "Extraído del anuncio", fecha: new Date().toISOString().slice(0, 10), estadoPrevio: "Por revisar" };
@@ -2592,6 +3001,7 @@ Contexto:\n${buildContext()}`;
         });
         window.addEventListener("keydown", (ev) => {
           if (ev.key !== "Escape") return;
+          if (apptMenuId.value) { apptMenuId.value = null; return; }
           if (modals.discard) { modals.discard = false; return; }
           if (modals.appt) { modals.appt = false; return; }
           if (modals.advisor) { closeAdvisorForm(); return; }
@@ -2634,7 +3044,7 @@ Contexto:\n${buildContext()}`;
         compareProps, weightsSum, dayAppts, dayConflicts,
         // methods
         money, totalMensual, desembolsoInicial, reqCosts, amuebladoLabel, descarteLabel,
-        formatDay, formatDayShort, scoreEval, fmtScore, persist,
+        formatDay, formatDayShort, scoreEval, fmtScore, persist, formatDireccionMX, saveMxAddress,
         openQuickAdd, saveQuickAdd, openProperty, closeProperty, saveEditingProp, onPropTab,
         duplicateProp, deleteProp, changeEstado, confirmDiscard, onPerrosChange,
         setTri, setScore, addPhotoUrl, removePhoto, setCoverPhoto, onEnlaceChange,
@@ -2646,10 +3056,13 @@ Contexto:\n${buildContext()}`;
         propOf, propName, advisorOf, advisorName, propsOfAdvisor, apptsOf,
         openAdvisorForm, closeAdvisorForm, saveAdvisor, deleteAdvisor, addAdvisorNote,
         otraPersona, haVisto, toggleVisto, marcarVistoYo, addComentario, removeComentario, formatCommentDate,
+        apptMenuId, toggleApptMenu, editApptFromMenu, deleteApptFromMenu,
         openApptForm, onApptPropertyChange, quickNewAdvisorForAppt, saveAppt, deleteAppt,
         apptClass, apptBadgeClass, estadoBadge, dayWindowLabel,
-        travelBetween, calcDayTravel, calcWorkTravel, saveManualTravel, geocodeProp,
-        searchBasicPlaces, searchOnePlace, openInMaps, navigateTo, toggleOverviewMap, mapQuery,
+        travelBetween, calcDayTravel, calcWorkTravel, saveManualTravel, formatTrasladoMeasure, geocodeProp,
+        allPlaceCats, customCatForm, serviciosOf, formatServicioLine, openServicioRoute,
+        searchBasicPlaces, searchOnePlace, addCustomPlaceCat, removeCustomPlaceCat,
+        openInMaps, navigateTo, toggleOverviewMap, mapQuery,
         openWhatsApp, whatsappForProp, whatsappForAppt,
         runPlanner, applyPlanner, toggleCompare,
         toggleSec, addVisitDay, exportBackup, importBackup, restoreBackup,

@@ -492,10 +492,11 @@ h1,h2,h3 { letter-spacing: -.025em; }
 .day-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .timeline { display: flex; flex-direction: column; gap: 10px; }
 .appt {
-  display: grid; grid-template-columns: 68px 1fr; gap: 12px;
+  display: grid; grid-template-columns: 68px 1fr auto; gap: 12px;
   padding: 14px; border-radius: var(--radius);
   border: 1px solid var(--line); background: var(--bg-elev);
   box-shadow: var(--shadow-sm);
+  position: relative;
 }
 .appt.confirmed { border-left: 4px solid var(--ok); }
 .appt.solicitada { border-left: 4px dashed var(--info); }
@@ -503,6 +504,36 @@ h1,h2,h3 { letter-spacing: -.025em; }
 .appt.conflict { background: var(--danger-soft); }
 .appt-time { font-weight: 800; font-size: .95rem; }
 .appt-dur { font-size: .75rem; color: var(--ink-faint); }
+.appt-kebab { position: relative; align-self: start; }
+.menu-pop {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  min-width: 140px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.menu-pop button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  color: inherit;
+}
+.menu-pop button:hover { background: var(--bg-tint); }
+.menu-pop button.danger { color: var(--danger); }
 
 /* Ranking table */
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -785,6 +816,21 @@ h4 {
   line-height: 1.35;
 }
 .gap-8 { gap: 8px; }
+.servicio-cat {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.servicio-cat:last-of-type { border-bottom: none; }
+.servicio-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.servicio-custom {
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
 .photo-mode-bar {
   flex-shrink: 0;
   display: flex;

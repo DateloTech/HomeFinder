@@ -191,7 +191,7 @@
           <div v-if="dayConflicts.length" class="alert danger mb-12">Conflictos de horario: {{ dayConflicts.map(c=>c).join('; ') }}</div>
           <div class="map-box mb-12" ref="dayMapEl"></div>
           <div class="timeline" v-if="dayAppts.length">
-            <div v-for="a in dayAppts" :key="a.id" class="appt" :class="apptClass(a)" @click="openApptForm(a)">
+            <div v-for="a in dayAppts" :key="a.id" class="appt" :class="apptClass(a)">
               <div>
                 <div class="appt-time">{{ a.hora }}</div>
                 <div class="appt-dur">{{ a.duracion || 45 }} min</div>
@@ -199,9 +199,16 @@
               <div>
                 <div class="row"><strong>{{ propName(a.propertyId) }}</strong> <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span></div>
                 <div class="small muted">{{ propOf(a.propertyId)?.colonia }} · {{ advisorName(a.advisorId || propOf(a.propertyId)?.advisorId) }}</div>
-                <div class="row mt-8" @click.stop>
-                  <button class="btn btn-sm" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i></button>
-                  <button class="btn btn-sm" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i></button>
+                <div class="row mt-8">
+                  <button class="btn btn-sm" type="button" @click="whatsappForAppt(a)"><i class="ph ph-whatsapp-logo"></i></button>
+                  <button class="btn btn-sm" type="button" @click="navigateTo(propOf(a.propertyId))"><i class="ph ph-navigation-arrow"></i></button>
+                </div>
+              </div>
+              <div class="appt-kebab" @click.stop>
+                <button class="icon-btn" type="button" title="Opciones" @click="toggleApptMenu(a.id)"><i class="ph ph-dots-three-vertical"></i></button>
+                <div class="menu-pop" v-if="apptMenuId===a.id">
+                  <button type="button" @click="editApptFromMenu(a)">Editar</button>
+                  <button type="button" class="danger" @click="deleteApptFromMenu(a.id)">Eliminar</button>
                 </div>
               </div>
             </div>
@@ -432,7 +439,7 @@
           <button class="section-h" @click="toggleSec('maps')"><i class="ph ph-map-pin"></i> Google Maps <span class="grow"></span><i class="ph" :class="secs.maps?'ph-caret-up':'ph-caret-down'"></i></button>
           <div class="section-b" v-show="secs.maps">
             <div class="field mb-8"><label>API Key</label><input type="password" v-model="data.config.mapsKey" @change="onMapsKeyChange" /></div>
-            <p class="small muted">Habilita: Maps JavaScript, Geocoding, Routes y Places. Restringe por dominio. La key queda solo en este dispositivo.</p>
+            <p class="small muted">Habilita: Maps JavaScript API, Geocoding API, Routes API y <strong>Places API (New)</strong> (no el Places legacy). Restringe por HTTP referrer. La key queda solo en este dispositivo.</p>
             <div class="kv mt-12">
               <dt>Llamadas Geocoding</dt><dd>{{ data.config.apiUsage?.geocoding || 0 }}</dd>
               <dt>Llamadas Routes</dt><dd>{{ data.config.apiUsage?.routes || 0 }}</dd>
@@ -765,8 +772,13 @@
           <template v-if="propTab==='resumen'">
             <div class="grid-2">
               <div class="field"><label>Alias</label><input v-model="editingProp.alias" @change="saveEditingProp" /></div>
-              <div class="field"><label>Colonia</label><input v-model="editingProp.colonia" @change="saveEditingProp" /></div>
-              <div class="field" style="grid-column:1/-1"><label>Dirección</label><input v-model="editingProp.direccion" @change="saveEditingProp" /></div>
+              <div class="field"><label>Colonia</label><input v-model="editingProp.colonia" @change="saveMxAddress" placeholder="Lindavista" /></div>
+              <div class="field" style="grid-column:1/-1"><label>Calle</label><input v-model="editingProp.calle" @change="saveMxAddress" placeholder="Av. Ruiz Cortines" /></div>
+              <div class="field"><label>Número ext.</label><input v-model="editingProp.numeroExt" @change="saveMxAddress" placeholder="123" /></div>
+              <div class="field"><label>Número int.</label><input v-model="editingProp.numeroInt" @change="saveMxAddress" placeholder="opcional" /></div>
+              <div class="field"><label>Municipio</label><input v-model="editingProp.municipio" @change="saveMxAddress" placeholder="Guadalupe / Monterrey / San Pedro…" /></div>
+              <div class="field"><label>C.P.</label><input v-model="editingProp.cp" @change="saveMxAddress" placeholder="67190" inputmode="numeric" /></div>
+              <div class="field" style="grid-column:1/-1"><label>Estado</label><input v-model="editingProp.estadoMx" @change="saveMxAddress" placeholder="Nuevo León" /></div>
               <div class="field" style="grid-column:1/-1">
                 <label>Enlace</label>
                 <div class="row">
@@ -810,8 +822,6 @@
                 </select>
               </div>
             </div>
-            <div class="alert ok mt-12" v-if="editingProp.amueblado==='sin'">Preferencia de amueblado: compatible.</div>
-            <div class="alert mt-12" v-else>Menor compatibilidad: preferencia es sin amueblar.</div>
             <div class="alert danger mt-12" v-if="editingProp.descarte">Descartada · {{ descarteLabel(editingProp.descarte.motivo) }} · {{ editingProp.descarte.nota || '' }}</div>
 
             <div class="collab-box mt-16">
@@ -1032,8 +1042,9 @@
           <template v-if="propTab==='ubicacion'">
             <div class="card-soft mb-12">
               <div class="small muted mb-4">Dirección registrada</div>
-              <div>{{ editingProp.direccion || 'Sin dirección' }}<span v-if="editingProp.colonia"> · {{ editingProp.colonia }}</span></div>
-              <div class="tiny faint mt-4">Monterrey, N.L.</div>
+              <div>{{ formatDireccionMX(editingProp) || editingProp.direccion || 'Sin dirección' }}</div>
+              <div class="tiny faint mt-4" v-if="editingProp.coloniaBounds">Colonia resaltada en el mapa</div>
+              <div class="tiny faint mt-4" v-else-if="editingProp.colonia">Ubica con API para resaltar la colonia en el mapa</div>
             </div>
 
             <!-- Mapa interactivo si hay API key -->
@@ -1081,9 +1092,10 @@
               <p v-if="editingProp.trasladoTrabajo?.min != null" class="mb-8">
                 <strong>{{ editingProp.trasladoTrabajo.min }} min</strong>
                 <span v-if="editingProp.trasladoTrabajo.km != null"> · {{ editingProp.trasladoTrabajo.km }} km</span>
-                <span class="badge ml-8">{{ editingProp.trasladoTrabajo.fuente }}</span>
+                <span class="badge ml-8">{{ editingProp.trasladoTrabajo.fuente === 'real' ? 'carro' : editingProp.trasladoTrabajo.fuente }}</span>
+                <span class="tiny muted" v-if="formatTrasladoMeasure(editingProp.trasladoTrabajo)"> · {{ formatTrasladoMeasure(editingProp.trasladoTrabajo) }}</span>
               </p>
-              <p v-else class="muted small mb-8">Sin dato todavía. En Google Maps pide la ruta al Tec y anota los minutos aquí.</p>
+              <p v-else class="muted small mb-8">Sin dato todavía. “Calcular con API” usa ruta en carro (tiempo y km) y guarda la hora de la medición.</p>
               <div class="grid-2">
                 <div class="field"><label>Minutos</label><input type="number" v-model.number="manualTravel.min" placeholder="25" /></div>
                 <div class="field"><label>Km</label><input type="number" step="0.1" v-model.number="manualTravel.km" placeholder="12.5" /></div>
@@ -1094,20 +1106,31 @@
             <div class="card-soft">
               <div class="row mb-8">
                 <strong class="grow">Servicios cercanos</strong>
-                <button class="btn btn-sm" type="button" @click="searchBasicPlaces" :disabled="!mapsReady || mapsBusy || editingProp.lat==null">Buscar básicos</button>
+                <button class="btn btn-sm" type="button" @click="searchBasicPlaces" :disabled="!data.config.mapsKey || mapsBusy || editingProp.lat==null">Buscar básicos</button>
               </div>
-              <p class="tiny muted mb-8" v-if="mapsReady">Básicos: supermercado, farmacia, hospital. El resto, uno por uno.</p>
-              <p class="tiny muted mb-8" v-else>Con API key podrás buscarlos aquí. Por ahora anótalos en Observaciones (Resumen).</p>
-              <div v-for="cat in PLACE_CATS" :key="cat.key" class="tri">
-                <div>
-                  <div>{{ cat.label }}</div>
-                  <div class="tiny muted" v-if="editingProp.servicios?.[cat.key]">
-                    {{ editingProp.servicios[cat.key].nombre }} · {{ editingProp.servicios[cat.key].distanciaTexto || '' }}
-                    <span class="badge">{{ editingProp.servicios[cat.key].fuente }}</span>
-                  </div>
-                  <div class="tiny faint" v-else>Sin dato</div>
+              <p class="tiny muted mb-8">Hasta 3 por categoría, distancia/tiempo en carro. Básicos: supermercado, farmacia, hospital.</p>
+              <div v-for="cat in allPlaceCats" :key="cat.key" class="servicio-cat mb-12">
+                <div class="row mb-4">
+                  <strong class="grow">{{ cat.label }}</strong>
+                  <button class="btn btn-sm btn-ghost" type="button" v-if="cat.custom" @click="removeCustomPlaceCat(cat.key)" title="Eliminar categoría">✕</button>
+                  <button class="btn btn-sm" type="button" @click="searchOnePlace(cat)" :disabled="!data.config.mapsKey || mapsBusy || editingProp.lat==null">Buscar</button>
                 </div>
-                <button class="btn btn-sm" type="button" v-if="!cat.basic" @click="searchOnePlace(cat)" :disabled="!mapsReady || mapsBusy || editingProp.lat==null">Buscar</button>
+                <div v-if="!serviciosOf(editingProp, cat.key).length" class="tiny faint">Sin dato</div>
+                <div v-for="s in serviciosOf(editingProp, cat.key)" :key="s.id" class="servicio-row">
+                  <div class="grow">
+                    <div class="small">{{ s.nombre }}</div>
+                    <div class="tiny muted">{{ formatServicioLine(s) || 'Sin ruta aún' }}</div>
+                  </div>
+                  <button class="btn btn-sm" type="button" :disabled="s.lat==null || s.lng==null || editingProp.lat==null" @click="openServicioRoute(editingProp, s)">Ruta</button>
+                </div>
+              </div>
+              <div class="servicio-custom mt-12">
+                <h4 class="mb-8">Nueva categoría</h4>
+                <div class="grid-2 mb-8">
+                  <div class="field"><label>Nombre</label><input v-model="customCatForm.label" placeholder="Veterinaria" /></div>
+                  <div class="field"><label>Texto de búsqueda</label><input v-model="customCatForm.query" placeholder="veterinaria" /></div>
+                </div>
+                <button class="btn btn-sm" type="button" @click="addCustomPlaceCat">Agregar categoría</button>
               </div>
             </div>
           </template>
@@ -1149,10 +1172,18 @@
           <!-- Citas de la propiedad -->
           <template v-if="propTab==='citas'">
             <button class="btn btn-primary mb-12" @click="openApptForm({propertyId: editingProp.id})">Nueva cita</button>
-            <div v-for="a in apptsOf(editingProp.id)" :key="a.id" class="appt mb-8" :class="apptClass(a)" @click="openApptForm(a)">
+            <div v-for="a in apptsOf(editingProp.id)" :key="a.id" class="appt mb-8" :class="apptClass(a)">
               <div><div class="appt-time">{{ a.hora }}</div><div class="appt-dur">{{ a.fecha }}</div></div>
-              <div><span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
+              <div>
+                <span class="badge" :class="apptBadgeClass(a.estado)">{{ a.estado }}</span>
                 <div class="small muted mt-8">{{ a.notas }}</div>
+              </div>
+              <div class="appt-kebab" @click.stop>
+                <button class="icon-btn" type="button" title="Opciones" @click="toggleApptMenu(a.id)"><i class="ph ph-dots-three-vertical"></i></button>
+                <div class="menu-pop" v-if="apptMenuId===a.id">
+                  <button type="button" @click="editApptFromMenu(a)">Editar</button>
+                  <button type="button" class="danger" @click="deleteApptFromMenu(a.id)">Eliminar</button>
+                </div>
               </div>
             </div>
             <div v-if="!apptsOf(editingProp.id).length" class="muted small">Sin citas.</div>
